@@ -396,29 +396,35 @@ architecture.md's overview).
 ### `ygg-agent`
 
 Signed, UI-triggered updates (ADR-015, ADR-040, ADR-041) are built: on the
-**Agent Binaries** page, upload a `ygg-agent` binary you built yourself
-(`make build-agent-linux`, or download one from a release channel) —
-the control plane signs it with its own key and lists it. Back on the
-**Nodes** page, a node running an older version than what's registered for
+**Agent Binaries** page, either **fetch** a `ygg-agent` build straight from
+the public releases repo for a chosen channel and architecture, or **upload**
+one you built yourself (`make build-agent-linux`) for a custom or patched
+build (ADR-055). Either way the control plane verifies it — a fetched binary
+against that release's published checksum, the same trust level `yggd`'s own
+self-update already uses — signs it with its own key, and lists it. Back on
+the **Nodes** page, a node running an older version than what's registered for
 its architecture shows an **Update** button; clicking it tells that node to
 download, verify, install, and restart itself. Progress and the eventual
 result (or failure reason) show inline on the node's row. Nothing else on
 that host is touched — Docker owns the container lifecycle, not the agent
 (ADR-012), so a restarting agent never stops a game server.
 
-You still need to build the binary yourself; there is no CI-to-control-plane
-pipeline (ADR-040 explains why: keeping the signing key out of CI entirely
-is the point). The version string is whatever you type in the upload form —
-it cannot be read automatically from a binary that may be cross-compiled for
-a different OS/architecture than the one running `yggd` — so make sure it
-matches what the binary actually reports on startup, or the update will
-"succeed" (install correctly) but never resolve as complete, since
-completion is driven by the node reconnecting and reporting that same
-version string.
+There is still no CI-to-control-plane signing pipeline (ADR-040 explains why:
+keeping the signing key out of CI entirely is the point) — fetching only
+gets you the checksummed bytes; this control plane still does its own local
+signing after either fetching or uploading. A fetched binary's version is
+read automatically from the release's own manifest, so it always matches
+what the binary actually reports. An uploaded binary's version is whatever
+you type in the upload form instead — it cannot be read automatically from a
+binary that may be cross-compiled for a different OS/architecture than the
+one running `yggd` — so make sure it matches what the binary actually reports
+on startup, or the update will "succeed" (install correctly) but never
+resolve as complete, since completion is driven by the node reconnecting and
+reporting that same version string.
 
 Manual updates still work exactly as before, and are the only option for a
-node's very first update (before any binary is registered) or for
-troubleshooting:
+node's very first update (before any binary is registered), for an
+air-gapped node with no outbound access to GitHub, or for troubleshooting:
 
 ```bash
 sudo systemctl stop ygg-agent
