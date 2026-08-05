@@ -926,9 +926,22 @@ Scope is a homelab: a single trusted operator, not untrusted tenants.
 | Docker Engine | Container runtime — the only execution path | Yes, per node |
 | SQLite | Control plane persistence (pure-Go driver, no cgo) | Yes |
 | systemd | Agent supervision and restart-on-update | Yes, per node |
-| SteamCMD | Installing Steam-distributed games (ARK and similar), per node | Fetched on demand |
+| SteamCMD | Installing Steam-distributed games (ARK, Valheim), per node | Yes, on any node running a `install.method: steamcmd` seed — **installed by the operator, never by Yggdrasil** |
 | SteamCMD (control plane host) | Seed authoring UI's Linux-depot check (ADR-051) | Optional |
 | Cloudflare Tunnel | External UI access | Optional |
+
+SteamCMD runs on the **node host**, not in a container (ADR-018): the agent shells out to it
+with `os/exec` to materialise a shared install. It is found via `YGG_STEAMCMD_BIN` if set,
+otherwise `steamcmd` on the agent process's `PATH` (`internal/shared/steamcmd`). Nothing
+fetches or installs it — a node without it fails the install job with
+`find steamcmd: exec: "steamcmd": executable file not found in $PATH` and leaves the server
+unprovisioned. Note that a distribution package often lands it at `/usr/games/steamcmd`, which is not on a
+systemd service user's default `PATH`, so `YGG_STEAMCMD_BIN` is frequently the answer even
+when the binary is genuinely installed. See docs/installation.md's node prerequisites.
+
+This is unrelated to `images/base-steamcmd` ("Container image library" above), which puts
+SteamCMD inside a *seed's runtime container* for a game that wants to validate or self-update
+at container start. The two never call into each other.
 
 No message broker, no external cache, no separate reverse proxy. The control plane is one
 binary and one database file.
