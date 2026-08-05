@@ -1,15 +1,8 @@
 # Yggdrasil — release binaries
 
-[![Develop version](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Farasoi%2Fyggdrasil-releases%2Fmain%2Fbadges%2Fdevelop-latest-version.json)](https://github.com/arasoi/yggdrasil-releases/releases/tag/develop-latest)
-[![Develop updated](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Farasoi%2Fyggdrasil-releases%2Fmain%2Fbadges%2Fdevelop-latest-updated.json)](https://github.com/arasoi/yggdrasil-releases/releases/tag/develop-latest)
-[![QA version](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Farasoi%2Fyggdrasil-releases%2Fmain%2Fbadges%2Fqa-latest-version.json)](https://github.com/arasoi/yggdrasil-releases/releases/tag/qa-latest)
-[![QA updated](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Farasoi%2Fyggdrasil-releases%2Fmain%2Fbadges%2Fqa-latest-updated.json)](https://github.com/arasoi/yggdrasil-releases/releases/tag/qa-latest)
-[![Release version](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Farasoi%2Fyggdrasil-releases%2Fmain%2Fbadges%2Frelease-latest-version.json)](https://github.com/arasoi/yggdrasil-releases/releases/tag/release-latest)
-[![Release updated](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Farasoi%2Fyggdrasil-releases%2Fmain%2Fbadges%2Frelease-latest-updated.json)](https://github.com/arasoi/yggdrasil-releases/releases/tag/release-latest)
-
-> The QA and Release badges above only populate once something has actually
-> been promoted to the `qa`/`main` branches of the source repository — until
-> then they'll show as invalid/"not found". The Develop badges are live now.
+[![develop](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Farasoi%2Fyggdrasil-releases%2Fmain%2Fbadges%2Fdevelop-latest-status.json&logo=github&logoColor=white)](https://github.com/arasoi/yggdrasil-releases/releases/tag/develop-latest)
+[![qa](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Farasoi%2Fyggdrasil-releases%2Fmain%2Fbadges%2Fqa-latest-status.json&logo=github&logoColor=white)](https://github.com/arasoi/yggdrasil-releases/releases/tag/qa-latest)
+[![release](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Farasoi%2Fyggdrasil-releases%2Fmain%2Fbadges%2Frelease-latest-status.json&logo=github&logoColor=white)](https://github.com/arasoi/yggdrasil-releases/releases/tag/release-latest)
 
 **Yggdrasil** (the world tree) manages and launches containerised game servers
 across one or more physical hosts. It's two binaries:
@@ -17,6 +10,7 @@ across one or more physical hosts. It's two binaries:
 - **`yggd`** — the control plane. One instance, owns all persistent state,
   serves the web UI and JSON API, and is the only place you interact with the
   system.
+
 - **`ygg-agent`** — one per host running game servers. Talks to Docker (or a
   Docker-API-compatible daemon such as Podman) to actually run containers, and
   reports back what's really running.
@@ -52,9 +46,9 @@ that branch's current tip rather than a fixed version:
 | **Release** | [`release-latest`](https://github.com/arasoi/yggdrasil-releases/releases/tag/release-latest) | Stable | You're running this for real and want the least churn |
 
 Because the tag floats, `git describe`-style version strings aren't reliable
-here — each release's title and the `version.json` badge payload carry the
-actual `<VERSION>-<commit>` string that was built, which is the one to quote
-if you ever need to report a bug.
+here — each release's title and the badges above carry the actual
+`<VERSION>-<commit>` string that was built, which is the one to quote if you
+ever need to report a bug.
 
 ## What's in a release
 
@@ -68,7 +62,7 @@ Every release (for every channel) carries the same set of assets:
 | `yggd.example.yaml`, `agent.example.yaml` | Example config files to copy and edit |
 | `install.sh` | A script that automates the manual steps below (see [Scripted install](#scripted-install)) |
 | `releases.json` | A small machine-readable manifest of this release's URLs, for tooling |
-| `version.json`, `updated.json` | The badge payloads used above — also fetchable directly if you want to script against them |
+| `version.json`, `updated.json`, `status.json` | The badge payloads used above — also fetchable directly if you want to script against them |
 
 Only `linux/amd64` and `linux/arm64` are built. Production Yggdrasil targets
 Linux specifically — `ygg-agent` needs systemd (for supervised restarts) and a
@@ -143,8 +137,7 @@ repository automatically by CI on every push to the source repo's `develop`,
   [`docs/installation.md`](docs/installation.md), kept in sync with the
   source repository automatically — if you spot something out of date here,
   it'll correct itself on the next push, no action needed on this repo.
-- The version/updated badges at the top of this page, generated fresh on
-  every build.
+- The badges at the top of this page, generated fresh on every build.
 
 If you have access to the source repository, the workflow that produces all
 of this is `.github/workflows/release.yml` there.
