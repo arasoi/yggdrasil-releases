@@ -37,18 +37,34 @@ separately below since most homelab setups split them.
 `hack/install.sh` automates everything in "1. Get the binaries" through
 "3. Enroll a node" below for a single role in one run (ADR-043) — Linux
 only, and it needs to run as root (it creates a system user and a systemd
-unit):
+unit). Run it with no arguments and it asks:
 
 ```bash
-# Control plane
 curl -fsSL https://github.com/arasoi/yggdrasil-releases/releases/download/release-latest/install.sh -o install.sh
-sudo bash install.sh --role control-plane
+sudo bash install.sh
+```
 
-# Node (paste the enroll command from the control plane's Nodes page,
-# or omit --enroll-cmd and the script will prompt for it)
-sudo bash install.sh --role node --control-addr yggd.lan:8443 \
+It asks what this host should run (control plane or node), which release
+channel to follow, and — for a control plane — which addresses to bind and
+whether to watch that channel for its own updates. For a node it asks for
+one thing: the `ygg-agent enroll ...` command from the control plane's Nodes
+page. It never asks where the control plane is, because that command already
+carries the address and `ygg-agent enroll` records it in `agent.yaml` itself.
+
+Every question has a flag, and a flag is never asked about — so the same
+script serves an unattended run:
+
+```bash
+sudo bash install.sh --role control-plane --channel main --http-addr 127.0.0.1:8080
+
+sudo bash install.sh --role node --channel main \
   --enroll-cmd "ygg-agent enroll --control-addr yggd.lan:8443 --token <token> --ca-fingerprint <fingerprint>"
 ```
+
+Prompts read from `/dev/tty` rather than stdin, so piping the script
+(`curl ... | sudo bash`) stays interactive instead of consuming itself as
+input. `--non-interactive` turns prompting off and takes defaults for
+anything not passed.
 
 Run `install.sh --help` for every flag (channel, addresses, install
 directory). It verifies the download the same way step 1 below does by hand
@@ -304,22 +320,28 @@ socket setup.)
 
 Paste the enrollment command, run as that user:
 
+Copy the example config first, so enrollment has a file to record the
+control plane's address in:
+
+```bash
+sudo cp agent.example.yaml /etc/yggdrasil/agent.yaml
+sudo chown yggdrasil:yggdrasil /etc/yggdrasil/agent.yaml
+```
+
+Then paste the enrollment command, run as that user:
+
 ```bash
 sudo -u yggdrasil ygg-agent enroll --control-addr yggd.lan:8443 --token <token> --ca-fingerprint <fingerprint>
 ```
 
-This writes a client certificate under `/var/lib/yggdrasil/agent/certs/` and
-exits — it does not start the agent. Copy the example config and point it at
-your control plane:
-
-```bash
-sudo cp agent.example.yaml /etc/yggdrasil/agent.yaml
-```
-
-Set `control_addr` in it to the same address you enrolled with. Everything
+This writes a client certificate under `/var/lib/yggdrasil/agent/certs/`,
+records `control_addr: yggd.lan:8443` in `/etc/yggdrasil/agent.yaml` (add
+`--config <path>` if yours lives elsewhere), and exits — it does not start
+the agent. You do not need to set `control_addr` by hand: the enrollment
+command is the one place that address is already given to you, and repeating
+it in the config was a step that only existed to be got wrong. Everything
 else about which servers to run arrives from the control plane on connect
-(ADR-012) — this file only needs to say where to find it and where to keep
-its own state.
+(ADR-012) — this file only needs to say where to keep its own state.
 
 Create a systemd unit:
 
@@ -391,8 +413,15 @@ same thing done by hand.
 
 Set `update_channel` (config key or `YGG_UPDATE_CHANNEL`) to `develop`,
 `qa`, or `main` — whichever channel you downloaded from — and the
-**Updates** page shows an **Update now** button whenever that channel has a
-newer build than what's running (ADR-044). Clicking it downloads the build,
+**Updates** page lists all three channels with the version each currently
+publishes, marking the one you watch. An **Update now** button appears on
+that channel when what it publishes is actually ahead of what's running
+(ADR-044): a higher version number reads **Update ready**, the same version
+number built from a different commit reads **Rebuild ready** (the ordinary
+case on `develop`, where `VERSION` is bumped by hand per ADR-039), and a
+channel that has fallen behind reads **Behind** and offers nothing — so
+following `main` while running a `develop` build never invites a downgrade.
+Clicking it downloads the build,
 verifies it against the release's published `SHA256SUMS` (the same check
 you'd run by hand below, just automated — no separate signing key), swaps
 it into place, and restarts `yggd`. This requires `Restart=always` in the
@@ -400,8 +429,20 @@ systemd unit (the example above already has it); without it, the binary
 still gets installed but nothing brings the process back up, and the page
 says so.
 
-`update_channel` is unset by default — this is opt-in. Leave it unset and
-update manually instead:
+**Switching channels from the page is safe to undo.** Each non-watched channel
+has a **Switch to** button. Before moving, the build you are running is copied
+into a per-channel archive (`<data_dir>/binary-archive/`), filed under the
+channel it came from — so switching `main` → `qa` to try something, then
+switching back, offers a **Restore** button that reinstalls your exact `main`
+build from disk. No download, and it does not matter whether that release is
+still published. Restoring saves the outgoing build the same way, so you can
+bounce between channels freely. An ordinary update archives the build it
+replaces too, so that is a rollback point as well. The switch is written back
+to `yggd.yaml` for you, so it survives a restart.
+
+`update_channel` is unset by default — this is opt-in, and the page's off state
+has buttons to start watching a channel (and a link to stop again) rather than
+requiring a config edit. Leave it unset and update manually instead:
 
 ```bash
 sudo systemctl stop yggd
@@ -416,19 +457,26 @@ architecture.md's overview).
 
 ### `ygg-agent`
 
-Signed, UI-triggered updates (ADR-015, ADR-040, ADR-041) are built: on the
-**Agent Binaries** page, either **fetch** a `ygg-agent` build straight from
-the public releases repo for a chosen channel and architecture, or **upload**
-one you built yourself (`make build-agent-linux`) for a custom or patched
-build (ADR-055). Either way the control plane verifies it — a fetched binary
-against that release's published checksum, the same trust level `yggd`'s own
-self-update already uses — signs it with its own key, and lists it. Back on
-the **Nodes** page, a node running an older version than what's registered for
-its architecture shows an **Update** button; clicking it tells that node to
-download, verify, install, and restart itself. Progress and the eventual
-result (or failure reason) show inline on the node's row. Nothing else on
-that host is touched — Docker owns the container lifecycle, not the agent
-(ADR-012), so a restarting agent never stops a game server.
+Signed, UI-triggered updates (ADR-015, ADR-040, ADR-041) are built, and live
+on the same **Updates** page. Its **Agents** section lists the same three
+channels with the `ygg-agent` version each publishes, and a per-architecture
+button to **fetch** that build straight from the public releases repo; below
+it, an **upload** form takes one you built yourself
+(`make build-agent-linux`) for a custom or patched build, or for a control
+plane with no outbound access to GitHub (ADR-055). Either way the control
+plane verifies it — a fetched binary against that release's published
+checksum, the same trust level `yggd`'s own self-update already uses — signs
+it with its own key, and lists it.
+
+The **Nodes** table on that same page then shows each node's running version
+against the newest registered binary for its architecture, with an **Update
+agent** button wherever the registered one is genuinely ahead (the same
+newer/rebuild/behind rule the control plane section uses). Clicking it tells
+that node to download, verify, install, and restart itself. Progress and the
+eventual result (or failure reason) show inline. The Nodes page carries the
+same button on each row as a shortcut. Nothing else on that host is touched —
+Docker owns the container lifecycle, not the agent (ADR-012), so a restarting
+agent never stops a game server.
 
 There is still no CI-to-control-plane signing pipeline (ADR-040 explains why:
 keeping the signing key out of CI entirely is the point) — fetching only
