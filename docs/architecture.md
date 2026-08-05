@@ -157,6 +157,7 @@ The block above is a node's layout, under the *agent's* `data_dir`. The *control
 /var/lib/yggdrasil/pki/ca.{crt,key}          # mTLS certificate authority (ADR-028)
 /var/lib/yggdrasil/pki/signing.key           # binary-signing key, a distinct trust role (ADR-040)
 /var/lib/yggdrasil/agent-binaries/<sha256>/  # signed agent binaries, content-addressed (ADR-040)
+/var/lib/yggdrasil/binary-archive/<channel>  # one saved yggd build per release channel (ADR-056)
 /var/lib/yggdrasil/yggd.db                   # SQLite (ADR-005)
 ```
 
@@ -282,15 +283,19 @@ agrees on whether they should be up (ADR-013).
 
 ### Agent updates are pushed from the UI
 
-Built in phase 7 (ADR-040, ADR-041). On `/agent-binaries`, an operator either fetches a
-`ygg-agent` build straight from the public releases repo (`arasoi/yggdrasil-releases`) for a
-chosen channel and architecture, or uploads a custom/patched build directly (ADR-055) — either
-way, the control plane signs the digest with its own key — separate from the mTLS CA, since
-signing artifacts and issuing node identity are different trust roles (ADR-040) — and stores the
-bytes content-addressed by sha256. A fetched binary is verified against that release's published
+Built in phase 7 (ADR-040, ADR-041). On `/updates`'s Agents section (there is no separate
+`/agent-binaries` page — ADR-056 folded it in), an operator either fetches a `ygg-agent` build
+straight from the public releases repo (`arasoi/yggdrasil-releases`) for a chosen channel and
+architecture, or uploads a custom/patched build directly (ADR-055) — either way, the control
+plane signs the digest with its own key — separate from the mTLS CA, since signing artifacts and
+issuing node identity are different trust roles (ADR-040) — and stores the bytes
+content-addressed by sha256. A fetched binary is verified against that release's published
 checksum before signing, the same checksum-only trust `yggd`'s own self-update already uses
-(ADR-044); CI never holds a signing key either way. The Nodes page shows an "Update" button once
-a newer binary is registered for a node's architecture than it is running.
+(ADR-044); CI never holds a signing key either way. The same page's Nodes table (and, as a
+shortcut, each row of the Nodes page) shows an "Update agent" button once a registered binary
+for that node's architecture is genuinely ahead of what it runs — ordered by
+`version.Compare`, not merely different, so a registered binary that is *behind* a node is
+never offered as an update (ADR-056).
 
 Clicking it dispatches `UpdateAgentStart` over the node's existing stream; the agent fetches
 the bytes itself over a dedicated `DownloadAgentBinary` RPC on the same authenticated
@@ -321,10 +326,34 @@ below already apply to their own exit criteria.
 not fit it — there is nothing to hold a separate signing key and push a verified binary down.
 Instead, an operator opts a running instance into update awareness by setting
 `update_channel: develop|qa|main` (empty and disabled by default). The `/updates` page checks
-that channel's GitHub release — cached in memory for an hour, checked on page load rather than
+every channel's GitHub release — cached in memory for an hour, checked on page load rather than
 by a background poller (the same on-demand philosophy the "Seed-driven provisioning is
-reconciled on page load" section below already uses) — and shows an **Update now** button once
-the release's commit differs from the running binary's.
+reconciled on page load" section below already uses) — and lists all three with the version each
+publishes, for both binaries, marking the one this instance watches. An **Update now** button
+appears on the watched channel once what it publishes is actually ahead of the running build
+(ADR-056): a higher version number, or the same version number from a different commit (a
+rebuild, the ordinary case on `develop` where `VERSION` is bumped by hand per ADR-039). A
+channel that has fallen behind reads "Behind" and offers nothing. Only the watched channel can
+install, since doing so replaces this running process.
+
+**Switching channels is reversible.** Before moving, the binary this host is running is copied
+into a per-channel archive under `<data_dir>/binary-archive/`, filed under the channel it
+actually came from — which after a switch and before the update that follows it is *not* the
+configured channel, so the archive tracks the running binary's origin separately in
+`running.json`. Switch back and the page offers to restore that exact build from disk: no
+download, and no dependency on that release still being published. Restoring saves the outgoing
+build the same way, so the move works in both directions. An ordinary update archives the binary
+it replaces too, making it a rollback point. Only the watched channel can install or restore,
+since either replaces this running process; the switch itself is written back to `yggd.yaml`
+(`config.SetServerUpdateChannel`) so it survives a restart rather than silently reverting.
+See ADR-056.
+
+A channel's published version comes from that release's own `releases.json` manifest, fetched
+over HTTPS *without* a checksum — release.yml generates `SHA256SUMS` from `release/` before
+writing the manifest into `public-assets/`, so it is not in that file and never has been. That
+is correct for what it is: a version label shown in the UI and recorded alongside a registered
+agent binary, never executed. Every binary is still verified against the published checksum
+before anything is installed or signed.
 
 Clicking it downloads the matching binary and the release's `SHA256SUMS`, verifies the checksum,
 and atomically replaces the running binary (`internal/control/selfupdate`, the same
