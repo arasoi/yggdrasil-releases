@@ -429,6 +429,27 @@ systemd unit (the example above already has it); without it, the binary
 still gets installed but nothing brings the process back up, and the page
 says so.
 
+**Moving an existing install to another channel from the command line** is
+the same script, with the channel named explicitly:
+
+```bash
+sudo bash install.sh --role control-plane --channel develop
+```
+
+That downloads and verifies the develop build, saves the build you were
+running into the per-channel archive (so the Updates page can offer to
+restore it), rewrites `update_channel` to match, and restarts. Naming the
+channel is what makes it a switch — re-running with no `--channel` follows
+whatever the config already says, so an ordinary update never moves a host
+between channels by accident.
+
+Both binaries report what they are with `--version`, which is what the script
+reads to label the saved build:
+
+```bash
+/var/lib/yggdrasil/bin/yggd --version
+```
+
 **Switching channels from the page is safe to undo.** Each non-watched channel
 has a **Switch to** button. Before moving, the build you are running is copied
 into a per-channel archive (`<data_dir>/binary-archive/`), filed under the
