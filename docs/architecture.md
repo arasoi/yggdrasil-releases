@@ -945,7 +945,7 @@ binary and one database file.
 | 5 | **In progress** | Shared installs, refcounting, read-only mounts with writable overlays, clusters, orchestrated install updates | **ARK**: one install, five maps, character transfer between them, one-button update that stops and restarts exactly what was running |
 | 6 | **In progress** | Multi-container pods: per-pod networks, dependency ordering, health gates, reverse-order shutdown, `degraded`, sidecar log/stat views | **Dune Awakening**: game + database + broker start in order and stop safely |
 | 7 | **In progress** | Signed agent binary distribution, UI-triggered update, N-1 compatibility testing | Update every agent from the UI while servers stay up |
-| 8 | **In progress** | Manual and scheduled backup and restore with per-container hooks, cluster volume backups, and resource graphs | Restore a Dune pod including its database |
+| 8 | **Done** | Manual and scheduled backup and restore with per-container hooks, cluster volume backups, and resource graphs | Back up a multi-container pod, run its `pre` hook, destroy the database sidecar's data, restore it, and bring the pod back up running |
 
 **Phase 2 must model a server as a pod from the start**, even though every pod has exactly one
 container until phase 6. A server that owns a *set* of containers with one primary costs
@@ -1041,15 +1041,27 @@ range instead, the same kind of stand-in phases 5 and 6 use for a real ARK image
 Dune Awakening image respectively. The exit criterion stays open until a genuine version bump
 gives N-1 something real to mean.
 
-**Phase 8's exit criterion — "restore a Dune pod including its database" — is proven
-end-to-end**, the literal sentence, not an approximation of it: a real control plane, a real
-`ygg-agent`, and real Podman back up a multi-container pod (primary + database sidecar with a
-volume), run a pre-hook standing in for `pg_dump` via `Runtime.Exec`, destroy the sidecar's live
-data, restore it, and bring the whole pod back up running — same synthetic-seed stand-in phase 6
-uses, for the same reason (no public Dune Awakening image to build a real one against). What the
-table's original scope bundled in but was deferred as its own follow-on work rather than
-shoehorned into that round (ADR-042): a cron-like backup scheduler, since built as an
-interval-based scheduler reusing the manual backup path (ADR-045, "Scheduled backups" above),
-and resource-usage graphs, since built as a bounded-ring-table collector and server-rendered
-SVG (ADR-046, "Resource graphs" above) — both now closed, leaving nothing outstanding from
-that original scope cut.
+**Phase 8 is done, against a criterion that was reworded to what the phase actually proves.**
+It originally read "restore a Dune pod including its database", and that sentence was met
+literally: a real control plane, a real `ygg-agent`, and real Podman back up a multi-container
+pod (primary + database sidecar with a volume), run a pre-hook standing in for `pg_dump` via
+`Runtime.Exec`, destroy the sidecar's live data, restore it, and bring the whole pod back up
+running. But it was met against the same synthetic game+database+broker seed phase 6 uses, for
+the same reason — there is no public Dune Awakening image to build a real seed against — so
+naming that game in a backup phase's criterion made this phase's completion hostage to a
+dependency that has nothing to do with backups. The criterion now describes the capability
+that was demonstrated, and **Dune Awakening by name remains phase 6's open item**, where the
+dependency actually belongs.
+
+Nothing is outstanding from the original scope. What the table's row bundled in but ADR-042
+deferred as its own follow-on work rather than shoehorning into that round — a cron-like
+backup scheduler, and resource-usage graphs — are both built: the scheduler as an
+interval-based one reusing the manual backup path (ADR-045, "Scheduled backups" above), and
+the graphs as a bounded-ring-table collector and server-rendered SVG (ADR-046, "Resource
+graphs" above).
+
+Two limits are worth carrying forward rather than reading "Done" as covering them. Backups are
+node-local: an archive never leaves the node it was taken on and a restore reads it back there,
+so there is no browser download and no off-node retention (ADR-042). And the network series on
+the resource graphs is a cumulative byte counter as the container runtime reports it, not a
+computed rate (ADR-046).
