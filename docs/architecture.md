@@ -329,7 +329,11 @@ Instead, an operator opts a running instance into update awareness by setting
 every channel's GitHub release — cached in memory for an hour, checked on page load rather than
 by a background poller (the same on-demand philosophy the "Seed-driven provisioning is
 reconciled on page load" section below already uses) — and lists all three with the version each
-publishes, for both binaries, marking the one this instance watches. An **Update now** button
+publishes, for both binaries, marking the one this instance watches. The page says when it last
+looked and carries a **Check now** button that drops the cache, since an hour is exactly the
+wrong TTL in the moment after publishing a release; every other timestamp on the page is a
+release's own publication time, which reads like freshness while saying nothing about how old
+the answer is. An **Update now** button
 appears on the watched channel once what it publishes is actually ahead of the running build
 (ADR-056): a higher version number, or the same version number from a different commit (a
 rebuild, the ordinary case on `develop` where `VERSION` is bumped by hand per ADR-039). A
