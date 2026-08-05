@@ -53,9 +53,19 @@ sudo bash install.sh --role node --control-addr yggd.lan:8443 \
 Run `install.sh --help` for every flag (channel, addresses, install
 directory). It verifies the download the same way step 1 below does by hand
 — HTTPS plus the release's published `SHA256SUMS`, no separate signing key
-(ADR-043) — and is best-effort idempotent: safe to re-run to pick up a
-newer release, but it will not reconcile a config file you've since
-hand-edited beyond the fields it originally set.
+(ADR-043). Re-running it against an already-installed host is a real update
+path, not just best-effort: it replaces the binary and restarts the service,
+but never rewrites a config value already in the file (yours or a previous
+run's) — a config option added by a newer release is appended net-new,
+commented out exactly as the example ships it, rather than silently never
+reaching an already-installed host. A node that is already enrolled is never
+re-enrolled automatically, since re-enrolling mints a new node identity and
+orphans that node's existing servers (ADR-052) — pass `--force-enroll` if you
+genuinely mean to replace it. A fresh control-plane install also provisions
+and configures a seeds directory (`seeds_dir`, under `--config-dir`)
+automatically, so the seed authoring UI works with no manual edit; bundled
+seeds (Minecraft, ARK, Valheim, ...) need no configuration at all, since
+they're embedded in the `yggd` binary itself (ADR-049).
 
 The rest of this document is the manual, step-by-step version of the same
 process — read it if you're customizing beyond what the script's flags
@@ -365,6 +375,11 @@ running on that host — stop `ygg-agent` there yourself (`systemctl disable
 --now ygg-agent`) if you are decommissioning the machine entirely.
 
 ## Updating
+
+If you installed with `hack/install.sh`, re-running the same command for
+your role updates the binary and restarts the service without touching your
+existing config (see "Quick install" above). The manual paths below are the
+same thing done by hand.
 
 ### `yggd`
 
