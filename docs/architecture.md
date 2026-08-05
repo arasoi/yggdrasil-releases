@@ -543,6 +543,18 @@ so an offset-derived port reads as derived rather than as an unexplained number 
 what the server is built from, and its backup position — reusing the console page's existing
 `stats.js`/`graphs.js` panels and endpoints rather than a second implementation.
 
+**The servers list is grouped by node**, one collapsible group per host, with that host's
+clusters nested inside it and its unclustered servers below them. "What is where" is the
+question that page is most often opened to answer, and a flat list answered it only by
+reading a Node column on every row — so that column is gone, since the group heading now
+says it once. A collapsed group still carries its host's summary: running count, anything
+needing attention, and whether the agent is connected. Only nodes with servers become
+groups. Creating a server is one **New server** button that opens a chooser — from a seed,
+or from a container image — and lands on the page for whichever was picked (`/servers/new-from-seed`
+or `/servers/new-from-image`); the image form used to sit permanently expanded at the bottom
+of the list, which put a form nobody was filling in below every server they were looking at.
+See ADR-054's amendment.
+
 Run state is carried by colour as well as text: a badge plus a stripe on the row's leading
 edge, both chosen by one Go method so nothing can disagree about what state a server is in.
 `degraded` is coloured apart from `crashed`, since ADR-019 makes them operationally distinct;
