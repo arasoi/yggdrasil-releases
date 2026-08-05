@@ -282,11 +282,15 @@ agrees on whether they should be up (ADR-013).
 
 ### Agent updates are pushed from the UI
 
-Built in phase 7 (ADR-040, ADR-041). An operator builds a `ygg-agent` binary and uploads it
-through `/agent-binaries`; the control plane signs the digest with its own key — separate from
-the mTLS CA, since signing artifacts and issuing node identity are different trust roles
-(ADR-040) — and stores the bytes content-addressed by sha256. The Nodes page shows an "Update"
-button once a newer binary is registered for a node's architecture than it is running.
+Built in phase 7 (ADR-040, ADR-041). On `/agent-binaries`, an operator either fetches a
+`ygg-agent` build straight from the public releases repo (`arasoi/yggdrasil-releases`) for a
+chosen channel and architecture, or uploads a custom/patched build directly (ADR-055) — either
+way, the control plane signs the digest with its own key — separate from the mTLS CA, since
+signing artifacts and issuing node identity are different trust roles (ADR-040) — and stores the
+bytes content-addressed by sha256. A fetched binary is verified against that release's published
+checksum before signing, the same checksum-only trust `yggd`'s own self-update already uses
+(ADR-044); CI never holds a signing key either way. The Nodes page shows an "Update" button once
+a newer binary is registered for a node's architecture than it is running.
 
 Clicking it dispatches `UpdateAgentStart` over the node's existing stream; the agent fetches
 the bytes itself over a dedicated `DownloadAgentBinary` RPC on the same authenticated
