@@ -157,11 +157,16 @@ invocations (it only adds version ldflags; nothing it does is otherwise
 special).
 
 Either way, get `yggd` onto the control plane host and `ygg-agent` onto each
-node host — matching that host's architecture — e.g. at
-`/usr/local/bin/yggd` and `/usr/local/bin/ygg-agent`. Downloading directly
-on the target host (`gh release download` or `curl -L` against the release
-asset URL) avoids a separate copy step; `scp` from wherever you built or
-downloaded works just as well.
+node host — matching that host's architecture — into a service-owned directory
+such as `/var/lib/yggdrasil/bin/yggd` and `/var/lib/yggdrasil/bin/ygg-agent`.
+The self-update path stages a temporary replacement next to the running binary,
+so that directory must be owned by the `yggdrasil` user and be writable by it.
+Downloading directly on the target host (`gh release download` or `curl -L`
+against the release asset URL) avoids a separate copy step; `scp` from
+wherever you built or downloaded works just as well. If you are migrating an
+existing install from the old `/usr/local/bin` location, re-running the
+bootstrap script updates the service unit to the new path and installs the
+binary into the service-owned directory for you.
 
 ### Release channels
 
@@ -195,8 +200,9 @@ On the control plane host:
 
 ```bash
 sudo useradd --system --home /var/lib/yggdrasil --shell /usr/sbin/nologin yggdrasil
-sudo mkdir -p /var/lib/yggdrasil /etc/yggdrasil
-sudo chown yggdrasil:yggdrasil /var/lib/yggdrasil
+sudo mkdir -p /var/lib/yggdrasil /var/lib/yggdrasil/bin /etc/yggdrasil
+sudo chown -R yggdrasil:yggdrasil /var/lib/yggdrasil
+sudo chmod 0755 /var/lib/yggdrasil/bin
 ```
 
 Copy the example config and edit it:
@@ -236,7 +242,7 @@ Wants=network-online.target
 Type=simple
 User=yggdrasil
 Group=yggdrasil
-ExecStart=/usr/local/bin/yggd --config /etc/yggdrasil/yggd.yaml
+ExecStart=/var/lib/yggdrasil/bin/yggd --config /etc/yggdrasil/yggd.yaml
 Restart=always
 RestartSec=2
 AmbientCapabilities=
@@ -329,7 +335,7 @@ Requires=docker.service
 Type=simple
 User=yggdrasil
 Group=yggdrasil
-ExecStart=/usr/local/bin/ygg-agent --config /etc/yggdrasil/agent.yaml
+ExecStart=/var/lib/yggdrasil/bin/ygg-agent --config /etc/yggdrasil/agent.yaml
 Restart=always
 RestartSec=2
 
