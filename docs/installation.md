@@ -83,6 +83,10 @@ automatically, so the seed authoring UI works with no manual edit; bundled
 seeds (Minecraft, ARK, Valheim, ...) need no configuration at all, since
 they're embedded in the `yggd` binary itself (ADR-049).
 
+To undo an install, `hack/uninstall.sh --role control-plane|node|both`
+removes the unit, binary, config, data directory, and system user — see
+"Uninstalling" below before running it, since there is no undo.
+
 The rest of this document is the manual, step-by-step version of the same
 process — read it if you're customizing beyond what the script's flags
 cover, building from source, or running a non-Linux dev build.
@@ -400,7 +404,54 @@ Deleting a node from the UI revokes it immediately: the hub refuses any
 stream from a node not in the registry, even though its certificate remains
 cryptographically valid otherwise. It does not touch anything already
 running on that host — stop `ygg-agent` there yourself (`systemctl disable
---now ygg-agent`) if you are decommissioning the machine entirely.
+--now ygg-agent`, or `hack/uninstall.sh --role node` for a full removal, see
+below) if you are decommissioning the machine entirely.
+
+## Uninstalling
+
+`hack/uninstall.sh --role control-plane|node|both` reverses what
+`hack/install.sh` (or the manual steps above) set up on a host: it stops and
+disables the systemd unit(s), and removes the binary, config file, data
+directory, and the `yggdrasil` system user.
+
+```bash
+sudo hack/uninstall.sh --role node          # this node only
+sudo hack/uninstall.sh --role control-plane # this control plane only
+sudo hack/uninstall.sh --role both          # a combined host, entirely
+```
+
+It is published alongside `install.sh` on every release, so a host set up
+with the `curl` one-liner does not need a source checkout to undo it:
+
+```bash
+curl -fsSL https://github.com/arasoi/yggdrasil-releases/releases/download/release-latest/uninstall.sh -o uninstall.sh
+sudo bash uninstall.sh --role node
+```
+
+There is no undo. Removing a control plane deletes its SQLite database and
+its `pki/` — the mTLS CA and the binary-signing key — so every enrolled node
+must re-enroll against whatever replaces it. Removing a node deletes that
+node's certificates, and its installs, server state, and local backups. Back
+up `--data-dir` (`/var/lib/yggdrasil` by default) first if you might want
+any of it later. The script asks for confirmation before deleting anything
+unless `-y`/`--yes` is given; `--keep-data` leaves the data directory alone
+and `--keep-user` leaves the system user in place. `--help` lists every flag.
+
+Your own seeds under `/etc/yggdrasil/seeds` are treated as data: removed
+with a control plane unless `--keep-data` is given. Bundled seeds ship
+inside the binary and are not stored there.
+
+On a combined host running both roles, uninstalling one leaves the other's
+data, binary, config, unit, and the shared system user untouched. The two
+share `--data-dir` there: control-plane state sits at the top of it, a
+node's own state under `<data-dir>/agent`, and — by default — both binaries
+under `<data-dir>/bin`, so only the slice belonging to the role being
+removed is deleted.
+
+This script only removes what is on the host it runs on. It does not revoke
+a node from the control plane's registry (delete it from the **Nodes** page
+for that, per "Removing a node" above), and it does not un-publish anything
+from GitHub Releases or GHCR.
 
 ## Updating
 
