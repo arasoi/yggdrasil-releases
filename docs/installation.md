@@ -103,14 +103,14 @@ On **each node host**:
   the usual way.
 - systemd, to supervise the agent and restart it (`Restart=always`) if it
   ever exits. The agent does not restart itself.
-- **`steamcmd`, on PATH (or pointed at via `YGG_STEAMCMD_BIN`) — only if a
-  seed you use declares `install.method: steamcmd`** (ARK Survival Ascended
-  and Valheim, among the bundled seeds). This runs directly on the node
-  host, not inside a container (ADR-018): the agent shells out to it with
-  `os/exec` the same way it would any other local tool. Nothing installs it
-  for you — see [SteamCMD's own docs](https://developer.valvesoftware.com/wiki/SteamCMD)
-  for your distribution. A seed using only `download`-method installs, or
-  none at all, never touches this.
+- **Nothing for SteamCMD.** A seed declaring `install.method: steamcmd` (ARK
+  Survival Ascended and Valheim, among the bundled ones) runs it in a
+  container on the node rather than on the host (ADR-057), so there is no
+  `steamcmd` binary to install and no `PATH` to arrange. What the node does
+  need is to be able to pull `ghcr.io/arasoi/base-steamcmd:release-latest`.
+  If that package is not readable from your node — the source repository is
+  private, so it may not be — mirror it and point the agent at the mirror
+  instead of installing SteamCMD by hand.
 
 Neither binary needs a Go toolchain, a database server, or anything else
 installed to *run* — only the container runtime and systemd above, on node
