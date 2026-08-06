@@ -797,11 +797,13 @@ generic base image library filling that gap:
 - **`images/base-dotnet`** — `FROM` `base-linux`, adding a pinned .NET runtime (ADR-047's second
   amendment), for a dedicated server that ships as a .NET application.
 
-This is unrelated to `internal/agent/install`'s own `steamcmd` install method (ADR-018), which
-runs on the **node host** via the agent process to populate a shared install's read-only mount.
-`base-steamcmd` (and `base-steamcmd-proton`, which inherits it) is for a seed's runtime
-**container** wanting SteamCMD available to itself — the pattern several community Steam
-dedicated-server images already use to validate or self-update at container start.
+`base-steamcmd` has two consumers, and since ADR-057 the first is the more important. It is what
+`internal/agent/install`'s `steamcmd` method runs to populate a shared install's read-only mount
+— in a container, via `Runtime.RunOnce`, rather than on the node host as it did originally
+(ADR-018's mechanism is unchanged; only where SteamCMD executes moved). It is also available to
+a seed's runtime **container** wanting SteamCMD for itself — the pattern several community Steam
+dedicated-server images use to validate or self-update at container start — which is what
+`base-steamcmd-proton` inherits it for.
 `base-steamcmd-proton` closes the gap `base-steamcmd`'s own entry used to name here: what a
 genuine ARK image needs (phase 5's status below) now has both the SteamCMD half and the Proton
 half built and verified against a real Podman host — the ARK image itself is still unbuilt.
@@ -926,22 +928,28 @@ Scope is a homelab: a single trusted operator, not untrusted tenants.
 | Docker Engine | Container runtime — the only execution path | Yes, per node |
 | SQLite | Control plane persistence (pure-Go driver, no cgo) | Yes |
 | systemd | Agent supervision and restart-on-update | Yes, per node |
-| SteamCMD | Installing Steam-distributed games (ARK, Valheim), per node | Yes, on any node running a `install.method: steamcmd` seed — **installed by the operator, never by Yggdrasil** |
+| SteamCMD | Installing Steam-distributed games (ARK, Valheim) | No — runs in a container on the node, not on the host (ADR-057) |
 | SteamCMD (control plane host) | Seed authoring UI's Linux-depot check (ADR-051) | Optional |
 | Cloudflare Tunnel | External UI access | Optional |
 
-SteamCMD runs on the **node host**, not in a container (ADR-018): the agent shells out to it
-with `os/exec` to materialise a shared install. It is found via `YGG_STEAMCMD_BIN` if set,
-otherwise `steamcmd` on the agent process's `PATH` (`internal/shared/steamcmd`). Nothing
-fetches or installs it — a node without it fails the install job with
-`find steamcmd: exec: "steamcmd": executable file not found in $PATH` and leaves the server
-unprovisioned. Note that a distribution package often lands it at `/usr/games/steamcmd`, which is not on a
-systemd service user's default `PATH`, so `YGG_STEAMCMD_BIN` is frequently the answer even
-when the binary is genuinely installed. See docs/installation.md's node prerequisites.
+SteamCMD runs in a **container** on the node, not on the node host (ADR-057): the agent calls
+`Runtime.RunOnce` with `images/base-steamcmd` and the install directory bind-mounted in, so a
+node needs only the container runtime it already needs for every game server. It used to shell
+out to a `steamcmd` binary on the host, which made SteamCMD a per-node prerequisite an operator
+had to satisfy by hand and failed, where they had not, as a puzzling install-job error rather
+than a missing dependency.
 
-This is unrelated to `images/base-steamcmd` ("Container image library" above), which puts
-SteamCMD inside a *seed's runtime container* for a game that wants to validate or self-update
-at container start. The two never call into each other.
+The container runs as the agent's own uid:gid, so the depot it writes stays owned by the process
+that has to refcount, mount, and eventually delete it. The image is overridable, for an
+air-gapped node mirroring it locally or an operator pinning a sha tag instead of tracking a
+floating channel. What a node does need is to be able to *pull* that image: the source repository
+is private, so the GHCR package must be readable, or mirrored locally and the override pointed at
+the mirror.
+
+`images/base-steamcmd` ("Container image library" above) now serves both of its uses: this one,
+and a *seed's runtime container* for a game that wants SteamCMD available to validate or
+self-update itself at container start. These were separate layers that never met until ADR-057;
+the install path is now the image's primary consumer.
 
 No message broker, no external cache, no separate reverse proxy. The control plane is one
 binary and one database file.
