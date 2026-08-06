@@ -60,8 +60,9 @@ the web UI only — it is not in the agent control path, which keeps end-to-end 
 could not present a client certificate to the origin). See ADR-011.
 
 Two consequences for the UI: WebSocket works through the tunnel and carries both console
-output and live state updates, and any long-lived HTTP stream needs a keepalive roughly
-every 20 seconds to survive idle timeouts.
+output (ADR-032) and live state updates (ADR-058) on two separate sockets, and any long-lived
+HTTP stream needs a keepalive roughly every 20 seconds to survive idle timeouts — both sockets
+ping every 15.
 
 Remote agents outside the LAN are not supported in v1. When they are needed, the intended
 path is Cloudflare private network routing or a WireGuard overlay — both transparent at the
@@ -499,6 +500,34 @@ Jobs. The agent streams progress up the control channel; the control plane persi
 and relays to any watching browser. A job survives the operator closing their tab and, where
 the underlying work permits, an agent reconnect (ADR-021).
 
+**Live state** — `hub.EventHub`, the console hub's sibling, fans state changes out to every
+open browser tab so a page reflects what the fleet is doing without being reloaded (ADR-058).
+It publishes from wherever the control plane already learns something moved: a
+`ServerStateChanged`, a `StateSnapshot`'s per-pod records, a node connecting or its stream
+tearing down, each of the four job-progress handlers, and — for changes originating in the
+control plane rather than at an agent — a lifecycle command's recorded intent and a server
+created or deleted.
+
+An event carries **identity, never content**: kind, server id, node id. A browser told that
+server X changed re-reads the page it is already on through the ordinary handler and swaps the
+regions that moved, so there is exactly one renderer (the Go templates) rather than a second
+one in JavaScript that could disagree with it. Pages opt in by marking regions
+(`<div data-live="servers-list">`), optionally scoped with `data-live-server` /
+`data-live-node`; `static/live.js` does the fetch-and-swap, in the same shape `stats.js`
+already uses for the live resource panel.
+
+A subscriber that falls behind has its backlog collapsed into a single `resync` rather than
+having events dropped, and the same `resync` is sent unprompted on every connect — so a tab
+that reconnects after a laptop wakes, or after `yggd` restarts to self-update, catches up
+without a second rule on the client. The socket announces itself only when it is *down*
+("reconnecting…"), because a page that looks current while no longer updating is the failure
+worth interrupting for.
+
+Three things are deliberately left outside live regions: the console page (no state badge, and
+its own socket already covers it), the Nodes page's one-time enrollment callout (a live re-read
+would swap the operator's single-use command away mid-copy), and the stats/graphs panels, which
+own the elements `stats.js` and `graphs.js` poll into.
+
 **Console** (phase 3) — the hub attaches to a server's primary container at most once per
 role, regardless of how many browser viewers are watching: the first `Subscribe` sends
 `ConsoleAttach` and opens the agent-side attachment, later ones join for free and get the
@@ -565,6 +594,11 @@ edge, both chosen by one Go method so nothing can disagree about what state a se
 idle is muted, so a healthy fleet reads calm and only trouble draws the eye — the wall-mounted
 case the stylesheet is written for. Colour stays the only swappable axis (Frost / Grove /
 Ember), and semantic colour sits outside the palettes entirely.
+
+**Those badges, stripes and counts move on their own.** State changes are pushed to every open
+tab and the page re-reads itself (ADR-058, "Live state" above) — which is what makes the
+wall-mounted case actually work, rather than showing whatever was true when someone last
+pressed reload.
 
 ## Seeds
 
@@ -710,9 +744,13 @@ Install jobs (ADR-021) stream progress from agent to control plane over dedicate
 `InstallStart`/`InstallProgress` messages, correlated by `job_id` rather than the request's
 `command_id` — installing can take anywhere from seconds to minutes, and nothing about it
 should block the stream the way a lifecycle command's reply does. Provisioning that has to
-wait on one is finished by reconciliation on page load rather than a background worker
-(ADR-035); a node's storage paths, needed to build a seed-driven pod's bind mounts, are
-reported at handshake rather than assumed by convention (ADR-034).
+wait on one is finished when the install job reports success, by the same handler that records
+it (`hub.InstallReconciler`, ADR-059), and again on page load as a safety net (ADR-035) — still
+no background worker for it either way. A node's storage paths, needed to build a seed-driven
+pod's bind mounts, are reported at handshake rather than assumed by convention (ADR-034).
+
+The page-load path is not redundant: it is what covers a server whose *node* was offline at the
+moment its install finished, so the event-driven path had nowhere to dispatch to.
 
 ### Seed bundles, authoring UI, and Steam integration
 
