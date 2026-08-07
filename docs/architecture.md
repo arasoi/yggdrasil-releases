@@ -113,9 +113,17 @@ lifecycle.
 **Allocation** — a reserved `(ip, port, protocol)` tuple on a node. First-class rows, since
 game servers are port-hungry and split across TCP and UDP. Only containers that declare
 ports get them; sidecars are usually internal-only. A seed's ports are either independently
-allocated (a preferred default, scanned from the node's port range) or derived from another
-port on the same container by a fixed offset — Valheim's Steam query port, hardcoded to
-`game_port + 1` with no way to configure it separately, is what this exists for (ADR-048).
+allocated — always the next free port in the node's range, never the seed's declared default,
+since a node's range is the operator's statement of which ports work on that host (ADR-061) —
+or derived from another port on the same container by a fixed offset, which Valheim's Steam
+query port, hardcoded to `game_port + 1` with no way to configure it separately, is what
+exists for (ADR-048).
+
+**A container always publishes a port to itself**: host and container port are the same
+number, because the game binds whatever the seed's command told it to bind and that value is
+the allocated port. A seed whose image starts the server itself, and so never reads the seed's
+command, has to be handed the port through env instead — Bedrock's `SERVER_PORT`. Getting this
+wrong is silent: the server starts, logs nothing wrong, and refuses connections (ADR-061).
 
 **Job** — a long-running operation with streamed progress: install, install update, backup,
 restore, agent update. One mechanism rather than four (ADR-021).
@@ -568,13 +576,32 @@ destination count can keep growing — beside an inset content pane with a slim 
 (ADR-054). It replaced a horizontal tab bar that nine destinations had already outgrown.
 
 **Every server has a page** at `/servers/{id}`: a breadcrumb, a tab strip shared by Overview,
-Console, Files and Backups, and lifecycle controls that stay visible across all four. Before
+Console, Files, Backups and Settings, and lifecycle controls that stay visible across all five. Before
 this, those were three unrelated top-level pages reached from a table row, with nothing on
 screen tying them to the server they belonged to. Overview shows the pod's containers (every
 server is a pod, ADR-017), its allocations joined to the seed declaration that produced them
 so an offset-derived port reads as derived rather than as an unexplained number (ADR-048),
 what the server is built from, and its backup position — reusing the console page's existing
 `stats.js`/`graphs.js` panels and endpoints rather than a second implementation.
+
+**Settings** edits a server's display name, its seed's editable variables, and its
+independently-allocated ports (ADR-062). Applying any of them destroys and re-provisions the
+pod, because a changed `PodSpec` is otherwise silently ignored — `Provision` returns early on
+`ErrPodExists` and `Start` never reads the spec for what the containers should be. World data
+survives, since `Destroy` removes containers and the pod network but never a host directory,
+and every writable path is a bind mount from the server's own directory. A port field left
+blank takes the next free port in the node's range; a derived port is shown but not editable.
+
+**Moving a server to another node** is its own action on that page, and a Job rather than an
+edit (ADR-063). The source node archives the server's writable state and uploads it; the
+control plane stages it; the target downloads, restores, and the server is repointed,
+reallocated, provisioned and — if it was running — started again. The **install does not
+travel**: it is reproducible from the seed (the same reason ADR-023 excludes it from backups),
+so the target resolves its own and the source's refcount drops. Ports are reallocated from the
+target's range, so players need the new numbers. A clustered server cannot move on its own,
+since a cluster's volume is node-local (ADR-020). The archive travels over two RPCs of its
+own rather than the persistent stream, exactly as an agent binary does (ADR-041); backups
+themselves remain node-local (ADR-042).
 
 **The servers list is grouped by node**, one collapsible group per host, with that host's
 clusters nested inside it and its unclustered servers below them. "What is where" is the
