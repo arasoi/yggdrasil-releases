@@ -575,10 +575,27 @@ whenever the last viewer disconnects would send the container's stdin an EOF it 
 for, which for a process that treats EOF as "the caller is done" — a shell is the sharpest
 example — means walking away from a console can silently kill the server. Detach unbinds
 forwarding rather than closing the connection; the connection itself closes only when the
-container exits or the agent shuts down. Log-rule scanning for readiness and crash detection
-is not implemented yet — it arrives with seeds in phase 4, alongside the ring buffer that
-would back it if backlog-on-attach alone proves insufficient once games with chattier startup
-logs are in scope.
+container exits or the agent shuts down.
+
+**The agent also attaches for itself.** `Watch` opens a server's attachment with no viewer
+bound, and every chunk read is passed to an observer whether or not anyone is watching — which
+is what makes log-value extraction work at all, since the values worth extracting are printed
+during startup, long before an operator opens a console (ADR-067). A viewer arriving later
+reuses that same session rather than opening a second one, so this uses the property ADR-032
+already relies on rather than adding a second mechanism.
+
+`internal/agent/logscan` assembles complete lines from those chunks — a container write splits
+anywhere, so matching raw chunks would miss any value straddling a read — and matches them
+against the seed's `logs.values` rules. Each match travels up as a `ServerFact`, which the
+control plane stores per `(server, name)` and shows on the server's page and its row in the
+fleet list. Facts are discarded the moment a server stops: a Valheim join code from a previous
+run is not stale but *wrong*, and would send players to a session that no longer exists.
+
+**Readiness and crash detection are still not driven by logs.** `logs.ready`/`logs.crash` are
+declared by four bundled seeds, carried through parsing, and acted on by nothing; readiness is
+still applied right after start. Making it depend on a match changes when every server reports
+running — a seed whose pattern never matched would strand a healthy server in `starting` — so
+it is deliberately left for its own decision (ADR-067).
 
 **Files** (phase 3) — each server gets a sandboxed directory on its node, rooted under the
 agent's `servers_dir` and created on first use. `internal/agent/files.Root` resolves every
@@ -700,8 +717,10 @@ variables:
   - { name: map, default: TheIsland, editable: true }
 
 logs:
-  ready: "Server has completed startup"
-  crash: "Fatal error"
+  ready: "Server has completed startup"     # declared, not yet acted on
+  crash: "Fatal error"                      # declared, not yet acted on
+  values:                                   # extracted and shown (ADR-067)
+    - { name: join_code, pattern: "join code ([0-9]+)" }
 
 stop:
   command: "DoExit"
@@ -787,6 +806,12 @@ end-to-end from the UI with no game-specific Go code:
   started, and matched its `logs.ready` rule against genuine stdout. It is also the first seed
   to use an offset-derived port (`query`, `game_port + 1`, ADR-048) — Valheim's Steam query
   port hardcoded with no independent flag, which is what that ADR's schema addition exists for.
+  It is now also the only seed declaring a `logs.values` rule, for the six-digit join code the
+  game prints and nothing else knows (ADR-067), alongside a `crossplay_flag` variable defaulting
+  to on — without `-crossplay` the game never prints a code at all, so the rule and the flag
+  travel together. **That rule is not yet verified against a real server**: it is written from
+  the game's documented line format, and the fake runtime produces no such output, so unlike the
+  `logs.ready` value above it it is reasoned rather than confirmed.
 
 One real-world wrinkle worth recording: PaperMC's download API changed shape between when the
 sketch above was written and phase 4's implementation — the current API (`fill.papermc.io/v3`)
