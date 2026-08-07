@@ -94,9 +94,13 @@ Seed  (data: how to install, run, and configure a game)
              └──► pod: [ game (primary), postgres, rabbitmq ]
 ```
 
-**Node** — a host running an agent. Reports capacity, CPU architecture, Docker version,
-and agent version. May carry an operator-assigned port range (ADR-048); unset means every
-port on it allocates from the global default range instead.
+**Node** — a host running an agent. Reports capacity, CPU architecture, kernel release,
+Docker version, and agent version, all at every handshake rather than once at enrollment.
+May carry an operator-assigned port range (ADR-048); unset means every port on it allocates
+from the global default range instead. It also carries **where it can be reached** — the peer
+address observed when its agent last dialled in, plus an optional operator override for when
+that is not where players connect (ADR-065). `/nodes/{id}` shows all of it and is where the
+override, the port range, agent update and removal live.
 
 **Install** — game files materialised once on a node and mounted into every server that
 references it. Refcounted; cannot be deleted while referenced. Optional: seeds whose
@@ -118,6 +122,13 @@ since a node's range is the operator's statement of which ports work on that hos
 or derived from another port on the same container by a fixed offset, which Valheim's Steam
 query port, hardcoded to `game_port + 1` with no way to configure it separately, is what
 exists for (ADR-048).
+
+The `ip` in that tuple is the **bind** address — always `0.0.0.0` — and part of the row's
+unique key. It is not a connect address, and was shown as one until ADR-065: a server's page
+read `0.0.0.0:30055/udp`, which is correct about binding and useless to a player. What an
+operator hands out is the *node's* address joined to the allocated port, resolved at render
+time; a node whose address is not known yet shows the port alone rather than a host nobody
+can reach.
 
 **A container always publishes a port to itself**: host and container port are the same
 number, because the game binds whatever the seed's command told it to bind and that value is
@@ -602,6 +613,14 @@ target's range, so players need the new numbers. A clustered server cannot move 
 since a cluster's volume is node-local (ADR-020). The archive travels over two RPCs of its
 own rather than the persistent stream, exactly as an agent binary does (ADR-041); backups
 themselves remain node-local (ADR-042).
+
+**Every node has a page** at `/nodes/{id}` (ADR-065), for the same reason every server does:
+a node was a table row, so the capacity its agent reports at every handshake — cores, memory,
+disk — was collected, persisted, and shown nowhere. It carries the host's facts, its agent and
+protocol versions, its storage paths, what it holds (servers, clusters, installs), and the two
+settings that belong to a host rather than to a server: its port range and its address. The
+Nodes list keeps the port-range form as a shortcut, so that form now renders errors back to
+whichever page submitted it.
 
 **The servers list is grouped by node**, one collapsible group per host, with that host's
 clusters nested inside it and its unclustered servers below them. "What is where" is the
