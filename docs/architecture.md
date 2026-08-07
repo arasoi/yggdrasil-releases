@@ -259,9 +259,24 @@ Clusters are a first-class `clusters` table with a globally-unique name (ADR-037
 joined from the server-from-seed form: a seed that declares `cluster.supported` shows an
 optional cluster name field, where a new name creates a cluster bound to the chosen node, an
 existing name on that node joins it, and an existing name bound to a different node is
-rejected with a message naming the right one. A read-only `/clusters` page lists every
-cluster with its node and member servers; join-or-create through server creation is still
-the only way to affect membership — there is no rename or move-between-nodes yet.
+rejected with a message naming the right one.
+
+`/clusters` lists every cluster with its node and members, and is where a cluster is managed
+(ADR-066): rename it, take a member out, or delete it. **Joining is still only possible through
+server creation** — this page can empty a cluster but not fill one.
+
+Every operation there is guarded by something the schema does not enforce, because
+`servers.cluster_id` has no foreign key: deleting a cluster is refused while it still has
+members (the row would otherwise vanish underneath every one of them, still mounting its
+volume), and while a cluster backup or restore is in flight. Removing a member clears the
+column *and* rebuilds that server's pod, since the `/cluster` mount and `-clusterid=` argument
+are fixed into the container at create time and the column alone changes nothing the game sees.
+
+**The shared volume is deleted only if explicitly asked for**, as a separate checkbox on the
+delete, since it is a different loss from the row — for ARK it is every character ever
+transferred between those maps. It travels as its own `DeleteClusterVolume` command rather than
+a file operation: the file sandbox is rooted at one server's directory and a cluster volume
+lives outside every such root (ADR-033). Moving a cluster between nodes is still not possible.
 
 ## Zero-downtime updates
 
