@@ -1021,11 +1021,20 @@ had to satisfy by hand and failed, where they had not, as a puzzling install-job
 than a missing dependency.
 
 The container runs as the agent's own uid:gid, so the depot it writes stays owned by the process
-that has to refcount, mount, and eventually delete it. The image is overridable, for an
-air-gapped node mirroring it locally or an operator pinning a sha tag instead of tracking a
-floating channel. What a node does need is to be able to *pull* that image: the source repository
-is private, so the GHCR package must be readable, or mirrored locally and the override pointed at
-the mirror.
+that has to refcount, mount, and eventually delete it. **That makes "runnable as an arbitrary
+uid" part of `base-steamcmd`'s contract, not an incidental property** — SteamCMD writes at the
+`/opt/steamcmd` root (`steamapps/`, `userdata/`) and self-updates into `linux32/`, so the image
+chmods that tree writable at build time. Removing that line does not fail loudly: installs die
+with `Missing configuration`, an error naming neither the uid nor the unwritable path, which is
+exactly how it went unnoticed once before (ADR-057's amendment). `RunOnceSpec.User` is pinned by
+the `Runtime` conformance suite so the uid dimension is exercised rather than assumed.
+
+The image is overridable via the agent's `steamcmd_image`, for an air-gapped node mirroring it
+locally, an operator pinning a sha tag instead of tracking a floating channel, or taking a fix
+from a channel ahead of the default — the default is `release-latest`, built only from `main`,
+so without the override a fix on `develop` cannot reach a node until it is promoted. What a node
+does need either way is to be able to *pull* that image: the source repository is private, so the
+GHCR package must be readable, or mirrored locally and the override pointed at the mirror.
 
 `images/base-steamcmd` ("Container image library" above) now serves both of its uses: this one,
 and a *seed's runtime container* for a game that wants SteamCMD available to validate or
