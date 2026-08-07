@@ -802,12 +802,55 @@ check rather than guessing.
 Not yet built: the optional icon image, seed-specific Dockerfile, and bundled sidecar "addons"
 a bundle directory can *structurally* hold (ADR-049/ADR-050) have no consumer yet — nothing reads
 or renders them, and the authoring UI's icon field is a plain text input (now prefillable from
-Steam's header image, but still no file upload). Single-file sharing of one seed as a tar.gz
-(ADR-049) is unbuilt too; the zip-slip-safe extraction `internal/agent/install/archive.go` has is
-still local to that package rather than lifted into something an export/import path could share,
-since neither exists yet to need it. None of this changes seeds' filesystem-only,
+Steam's header image, but still no file upload). Exporting a locally-authored seed as a shareable
+archive (ADR-049) is unbuilt too, though the half it was missing — packing a directory — now
+exists as `internal/archive.CreateTarGz`. None of this changes seeds' filesystem-only,
 load-once-at-startup model (ADR-007) — a save is still a plain file write, reloaded the same way
 startup already loads every seed.
+
+### Seeds are downloadable, and versioned independently of `yggd`
+
+A seed is data, but until ADR-060 the only way a fix to a bundled one reached an operator was a
+new `yggd` release — so either `VERSION` climbed because a YAML file changed, or the shipped
+seeds drifted behind the repository. Seeds now have their own release channel.
+
+`.github/workflows/seeds.yml` is triggered by a **path filter over `seeds/`**, runs
+`cmd/ygg-seedpack`, and publishes to release tags of its own — `seeds-develop-latest`,
+`seeds-qa-latest`, `seeds-release-latest` — floating per channel the way ADR-038's binary
+channels do, in the same public repository. Separate tags are the point rather than tidiness:
+sharing release.yml's would re-couple exactly what this separates. Each seed carries its own
+`version:`, and the packer refuses one `version.Compare` cannot order, since publishing that
+produces a seed nobody could ever be told to update. Every bundle is loaded through
+`internal/seed` before packing, so a seed `yggd` could not load fails in CI rather than on an
+operator's control plane.
+
+Seeds therefore load in **three layers** (`seed.Merge`, in order):
+
+| Layer | Where | Why it is at this level |
+|-------|-------|-------------------------|
+| bundled | embedded in the binary (`go:embed`) | a fresh install has seeds with no network at all |
+| catalog | `<data_dir>/seeds/<id>/` | downloaded, updated on its own schedule |
+| operator | `--seeds-dir/<id>/` | hand-authored, so a catalog update can never overwrite it |
+
+Downloaded bundles deliberately do **not** live in `--seeds-dir`: an update replaces a bundle
+wholesale, and that operation must be structurally incapable of reaching hand-written content.
+Each carries a `.ygg-source.json` recording channel, version, and digest — inside the bundle
+rather than in a database, so a seed and its provenance cannot be separated and nothing can fall
+out of sync with the filesystem. A bundle with no marker is one an operator placed by hand, and
+the catalog neither claims nor deletes it.
+
+`/seeds` lists what the catalog publishes beside what is installed, ordered by `version.Compare`
+so a channel that has fallen behind reads "older" rather than offering a downgrade. Install and
+update are the same action, and both end in the same in-process `reloadSeeds` a save through the
+authoring UI already runs — a downloaded seed is usable without restarting `yggd`. An install is
+staged, validated through the ordinary loader, and only then swapped into place, so a malformed
+entry fails at download with the working copy untouched.
+
+Trust is HTTPS plus the published `SHA256SUMS` (ADR-044's level, reused rather than
+reimplemented), not ADR-040's signing key: a seed is parsed and validated before it can replace
+anything, unlike an agent binary that executes with Docker-socket access on every node. The
+catalog is opt-in — `seed_channel` defaults to empty, and with it unset the page makes no
+outbound call at all, offering a channel picker instead that persists the choice to `yggd.yaml`.
 
 ## Container image library
 
