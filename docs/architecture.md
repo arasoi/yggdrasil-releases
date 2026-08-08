@@ -1087,10 +1087,19 @@ computation and no vendored library (ADR-006). A fixed set of window presets (1h
 is offered as plain buttons rather than a free-form range picker, the same homelab-scale call
 ADR-045 made for backup intervals.
 
-Network rx/tx are charted as Docker/Podman report them — **cumulative bytes since container
-start**, not a computed rate — so the network graph shows total transfer rising over the
-window rather than throughput. Computing a true rate would mean reasoning about counter resets
-across restarts and gaps in sampling; deferred rather than built silently; see ADR-046.
+Network rx/tx are **charted as a per-second rate** (ADR-075), not as the cumulative counters
+Docker and Podman actually report — a raw counter only ever rises, so its slope carried all the
+meaning and the graph answered little beyond "has there been traffic". Differencing needs the
+two cases ADR-046 deferred it for, and both are handled: a counter that goes backwards means the
+container restarted, so the line breaks rather than plotting a negative dip, and a gap wider
+than a few sample intervals breaks it too rather than interpolating across an agent outage.
+
+The x axis starts at the **first real sample** rather than at the requested window's start, with
+both ends labelled in clock time — five minutes of history inside a 7d window previously drew in
+the rightmost 0.05% of the width. Windows longer than the plot is wide are downsampled to a peak
+envelope (each bucket keeps its maximum, never its mean, so a spike survives), and the four
+series carry palette-independent colours of their own for the same reason semantic state colour
+does: "in" and "out" have to stay tellable apart whichever accent is active.
 
 ## Security model
 
