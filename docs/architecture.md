@@ -827,9 +827,14 @@ end-to-end from the UI with no game-specific Go code:
   It is now also the only seed declaring a `logs.values` rule, for the six-digit join code the
   game prints and nothing else knows (ADR-067), alongside a `crossplay_flag` variable defaulting
   to on — without `-crossplay` the game never prints a code at all, so the rule and the flag
-  travel together. **That rule is not yet verified against a real server**: it is written from
-  the game's documented line format, and the fake runtime produces no such output, so unlike the
-  `logs.ready` value above it it is reasoned rather than confirmed.
+  travel together. **That rule is now verified against a real crossplay server** (ADR-073),
+  closing the caveat this entry previously carried: a real run reached
+  `Session "..." registered with join code 105503` and the pattern extracted it. The same run
+  settled what the empty `has join code ,` line means — nothing. A healthy server logs it
+  seconds before PlayFab returns the code, so it is not the crossplay-is-broken signal ADR-070
+  took it for; the real signal is the absence of `Joined PlayFab Party network` and a
+  30-second `create and join network` retry loop, which is what a `libparty.so` missing
+  `libpulse-mainloop-glib0` produces.
 
 One real-world wrinkle worth recording: PaperMC's download API changed shape between when the
 sketch above was written and phase 4's implementation — the current API (`fill.papermc.io/v3`)
