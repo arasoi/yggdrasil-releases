@@ -800,6 +800,13 @@ Placement scheduling is deferred until a mixed fleet exists (ADR-016).
 The bundled seeds deliberately sit at opposite ends of ADR-018's install model, and all run
 end-to-end from the UI with no game-specific Go code:
 
+Both Minecraft seeds expose their full documented configuration surface (ADR-076) — 44
+settings for Paper, 26 for Bedrock — grouped, typed, and with settings that depend on another
+(`rcon.password`, a resource pack's checksum) hidden until the setting they depend on is on.
+That dependency is declared by the seed as `show_if`, not encoded in the UI, so a new game
+stays a data change. A hidden control still submits, so visibility never becomes something the
+control plane has to reason about.
+
 - **Paper** has a non-shared `install` (`method: download`) and a `config.files` block that
   renders `eula.txt` and `server.properties` from real template files in its bundle directory
   (`ConfigFile.SourcePath`, ADR-049) — the licence-gate row in the table above.
