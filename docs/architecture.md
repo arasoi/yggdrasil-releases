@@ -577,6 +577,24 @@ example — means walking away from a console can silently kill the server. Deta
 forwarding rather than closing the connection; the connection itself closes only when the
 container exits or the agent shuts down.
 
+**A hub-side console session dies with its node's stream** (ADR-072). Its stream_ids mean
+nothing to a restarted agent, so when a node's stream tears down — or is displaced by a
+reconnect — every console session on that node is closed and its viewers told why. The
+browser's ordinary reconnect loop is the recovery path: it resubscribes, which sends a fresh
+`ConsoleAttach` once the node is back, and the agent replays its scrollback into the new
+session. The terminal resets itself when the first data of a new session arrives (never
+eagerly on connect, which would wipe the last readable output while a node is still down), so
+a replayed backlog lands in an empty terminal rather than duplicating what was on screen.
+
+The console page itself is a full terminal, not a log tail: xterm.js with a 50k-line
+scrollback, ANSI color themed from the same CSS variables as the rest of the UI (so the
+terminal and the box it sits in cannot disagree — two different darks there is what once made
+the page look like two nested consoles), search with match highlighting (vendored
+`@xterm/addon-search`, Ctrl+F), clickable URLs, and refitting driven by a ResizeObserver plus
+font readiness rather than a single load-time measurement. Ctrl+C with a selection copies it
+instead of sending ETX to the game's stdin — a keystroke that would otherwise shut some
+servers down.
+
 **The agent also attaches for itself.** `Watch` opens a server's attachment with no viewer
 bound, and every chunk read is passed to an observer whether or not anyone is watching — which
 is what makes log-value extraction work at all, since the values worth extracting are printed
