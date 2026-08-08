@@ -968,6 +968,14 @@ anything, unlike an agent binary that executes with Docker-socket access on ever
 catalog is opt-in — `seed_channel` defaults to empty, and with it unset the page makes no
 outbound call at all, offering a channel picker instead that persists the choice to `yggd.yaml`.
 
+**A bundle on disk that will not load is skipped, not fatal.** The catalog and operator layers
+are files the running binary did not ship, so closing a validation gap invalidates bundles that
+were perfectly acceptable when they were installed — and refusing to start then crash-loops the
+control plane over a file it could ignore, with no UI left through which to remove it. Startup
+and the in-process reload both use `seed.LoadDirTolerant`, logging each skipped bundle at error
+level and falling through to the layer beneath. Only `LoadFS` stays strict: the bundled set is
+embedded in the binary, so a failure there is a build defect with nothing behind it.
+
 ## Container image library
 
 Every bundled seed's container image is either official (Paper's `eclipse-temurin`) or a
