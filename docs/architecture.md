@@ -1050,23 +1050,78 @@ changes — exactly the seam ADR-049 planned. The schema bumped to 2 accordingly
 `seeds/*` directly would have swept `bundled.go` itself in as if it were a seed — the exact
 problem ADR-049 flagged as unresolved when it was written.
 
-ADR-050's seed authoring UI is built for the common single-container case: `/seeds` lists every
-seed (bundled and operator, badged by source), `/seeds/new` and `/seeds/{id}/edit` write straight
-into the operator's `--seeds-dir` as a real bundle directory, and saving triggers an in-process
-reload (`internal/control/web`'s `reloadSeeds`, guarded by a mutex around `s.seeds`) — a seed
-created or edited through the UI shows up in "New server from seed" immediately, no restart.
-Editing a *bundled* seed is supported by materialising an operator override with the same id on
-first save, resolving the open question ADR-050 originally left unanswered. The guided form
-covers identity, install (none/download/steamcmd), one writable path, the primary container,
-ports, env, variables, logs, stop, and backup-include; anything it can't represent — a `Config`
-block, a `Cluster`, more than one container, or an offset-derived port (`OffsetFrom`, ADR-048) —
-disables the guided section entirely rather than risking a save that silently drops it, falling
-back to the raw-YAML `<details>` section every seed (guided-eligible or not) also has, validated
-through the same `internal/seed.Parse` a bundled seed loads through. `Seed`'s YAML tags gained
-`omitempty` throughout so a guided save's `yaml.Marshal` output reads like something a human
-would hand-write — the first version, before that fix, wrote `install: null`, `env: {}`, and a
-spurious empty `stop:` block for every guided-created seed, caught by actually creating one
-through a live browser session rather than assumed correct from the code alone.
+The seed authoring UI covers the **whole** of schema 3 (ADR-079). `/seeds` lists every seed
+(bundled, catalog and operator, badged by source), `/seeds/new` and `/seeds/{id}/edit` write
+straight into the operator's `--seeds-dir` as a real bundle directory, and saving triggers an
+in-process reload (`internal/control/web`'s `reloadSeeds`, guarded by a mutex around `s.seeds`) —
+a seed created or edited through the UI shows up in "New server from seed" immediately, no
+restart. Editing a *bundled* seed materialises an operator override with the same id on first
+save, resolving the open question ADR-050 originally left unanswered.
+
+The form has real fields for every block: identity and branding, the install's ordered steps (all
+nine executable ops), writable paths and the file denylist, cluster support, containers with their
+ports, env, volumes, dependencies, healthcheck and backup hooks, variables and settings sharing
+one control renderer, groups, config files, readiness, crash detection, stop, log values and
+events, connect, backup, and migrations. **Rows repeat** — `static/seedform.js` clones a
+`<template>` prototype and renumbers a placeholder token — which is what retired the fixed row
+counts the old form padded to, along with the three `guidedEditable` checks whose only job was to
+refuse a seed that exceeded one. Three of the four recorded drop-on-save bugs were that pattern
+failing.
+
+`internal/control/web/seedform` owns the form's shape: `Decode` turns `url.Values` into a
+`seed.Seed`, and `Encode` is its inverse, existing so that **every bundled seed round-trips
+unchanged** and does so idempotently. That is the mechanical answer to a failure this codebase has
+recorded four times — a seventh variable, a `Required` flag, an offset relationship, a
+`logs.values` block — each found only after it shipped, by someone noticing a value had vanished.
+Two further tests join the halves: the rendered page must emit every field name the decoder reads,
+and each row prototype's path shapes must match a rendered row's, so a row added in the browser
+submits the same field set as one from the server.
+
+Decoding is **index-driven, not count-driven** — `containers.0.ports.1.name`, with the indices
+collected from what was actually submitted — so a row deleted in the browser leaves a gap and
+nothing downstream cares. Each discriminated block (an install step's `op`, a setting's
+destination, a control's `type`) reads only the fields its selected case accepts, because the form
+renders them all and hides the rest, and `Validate` rejects a field that does not belong.
+
+`guidedEditable` and its allowlist stay, at full coverage. What they guard is not today's gaps but
+the *next* field added to `seed.Seed`: one that nobody has taught the form about is unrepresentable
+by default, so a seed using it falls back to the raw-YAML pane rather than being saved without it.
+That pane is now a co-equal path rather than a fallback, and both routes converge on the same
+`internal/seed.Parse` and `Validate` a bundled seed loads through.
+
+### Seeds can be published, not only downloaded
+
+The catalog was one-way until ADR-079: `yggd` read `seeds.json` from a floating channel tag and
+nothing could push one, so a seed authored on one control plane reached another only by copying
+files. `internal/control/publish` is the outbound half, reusing `internal/seedpack` unchanged — so
+a seed published from the UI and one published by `.github/workflows/seeds.yml` are byte-identical
+artifacts, and the version rule that makes a catalog orderable is enforced by the same code in
+both. **Only the operator layer is published**, never the merged set: republishing the bundled and
+catalog seeds an operator never wrote, under their own channel, would mean a later `yggd` upgrade
+silently changing what they were shipping.
+
+The important part is what it refuses. Publishing replaces a channel's release wholesale — the tag
+floats, so the existing release is deleted and recreated — which means a publish aimed at the
+repository `yggd` reads its own catalog from would **destroy the catalog every other operator
+installs from**, on one click, with no undo and no local copy of what was lost.
+`publish.ResolveTarget` refuses that target as a checked error, case-insensitively, and refuses it
+even when set deliberately: this is not a preference being overruled but a request whose
+consequence is not what the words describe. The settings form and the Seeds page each refuse it
+too, so an operator hears about it when they save rather than when they press the button.
+
+Packing runs first and completely, before anything on the remote is touched. `seedpack` loads
+every bundle through the strict loader and rejects a version `version.Compare` cannot order, so a
+seed that would produce an uninstallable catalog fails while the existing release is still intact
+— deleting it and *then* discovering the bundles are unpublishable would leave the channel empty,
+which is worse than not having published.
+
+`seeds.publish_repo` has **no default**, so publishing is off until an operator names a target, and
+`seeds.publish_token` is a `KindSecret` (ADR-078) whose value cannot reach page data by
+construction. The token carries a Test action that asks GitHub both questions worth asking — is
+this token accepted, and can it write to that repository — because a valid token for the wrong
+account authenticates fine and is exactly the misconfiguration that otherwise surfaces as a failed
+publish much later. This is the first credential `yggd` holds that lets it write somewhere outside
+itself; every other one is inbound-facing or read-only.
 
 ADR-051's Steam integration is built: a "Fetch from Steam" button next to the SteamCMD app id
 field (`internal/control/steam`, called from `internal/control/web/steam_lookup.go`) queries two
@@ -1310,10 +1365,13 @@ are different states, and "give me the default back" is the first one.
 The table is key/value; what a key *means* lives in `internal/control/settings` as a registry
 of typed `Definition`s. So adding a setting is a Go declaration plus a consumer — no
 migration, no template edit, no new form field, because the page renders whatever the registry
-declares. Three ship, each with a live consumer: `log.level` (the process's own
+declares. Five ship, each with a live consumer: `log.level` (the process's own
 `slog.LevelVar`, so debug can be switched on and off without a restart), `stats.retention_days`
-(read by `telemetry.Collector` on every prune, so lowering it frees space within a minute), and
-`steam.api_key`.
+(read by `telemetry.Collector` on every prune, so lowering it frees space within a minute),
+`steam.api_key`, and the pair that lets this control plane publish its own seeds —
+`seeds.publish_repo` and `seeds.publish_token` (ADR-079). That last one is the first credential
+here that writes somewhere outside this deployment, which is why its target has no default and why
+the one repository it must never name is refused rather than merely discouraged.
 
 **A secret's value cannot reach the page**, as a property of the types rather than a rule the
 template is trusted to follow: `Manager.Resolve` — what the page reads — reports only whether
