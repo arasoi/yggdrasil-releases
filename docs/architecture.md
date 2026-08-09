@@ -1293,6 +1293,47 @@ envelope (each bucket keeps its maximum, never its mean, so a spike survives), a
 series carry palette-independent colours of their own for the same reason semantic state colour
 does: "in" and "out" have to stay tellable apart whichever accent is active.
 
+## Operator settings
+
+Configuration splits on one question: **is it needed before there is a database to read?**
+
+`yggd.yaml` keeps what is — listen addresses, `data_dir`, the database path, `seeds_dir` —
+resolved once at startup into an immutable struct, and changing one means restarting the
+process that read it. Everything else is a **runtime setting** in the `settings` table,
+adjustable from `/settings` while yggd runs (ADR-078).
+
+Resolution is **database → yggd.yaml → registry default**, and the page says which is in
+effect, so a value an operator put in the file is never silently overruled without
+explanation. Clearing an override is a delete rather than a write of the empty string: those
+are different states, and "give me the default back" is the first one.
+
+The table is key/value; what a key *means* lives in `internal/control/settings` as a registry
+of typed `Definition`s. So adding a setting is a Go declaration plus a consumer — no
+migration, no template edit, no new form field, because the page renders whatever the registry
+declares. Three ship, each with a live consumer: `log.level` (the process's own
+`slog.LevelVar`, so debug can be switched on and off without a restart), `stats.retention_days`
+(read by `telemetry.Collector` on every prune, so lowering it frees space within a minute), and
+`steam.api_key`.
+
+**A secret's value cannot reach the page**, as a property of the types rather than a rule the
+template is trusted to follow: `Manager.Resolve` — what the page reads — reports only whether
+one is *configured*, and `Manager.Value` — what a consumer reads — returns the real thing. An
+empty submission means "leave the stored one alone", so removing one is its own Clear action.
+
+**Every setting must name itself in `web.applySetting`**, whose default case is an error. A
+setting an operator can save that nothing reads is this codebase's most-repeated bug (ADR-067,
+ADR-071, ADR-077) and a settings page hides it especially well, because saving appears to
+succeed; a test saves every registry key so a new one fails there instead.
+
+The **release channels are shown but not owned**. Switching one archives the running binary and
+changes what Update installs, so ADR-056 deliberately keeps that setting on the page performing
+the action; `/settings` reports both with a link. A **node's** own settings — its address, its
+port range — likewise belong to that node and stay on its page.
+
+`store.Open` narrows the database file to `0600`, since it holds password hashes, session
+tokens, bootstrap tokens and now credentials. Defence in depth rather than the boundary: the
+containing directory is already `0750`, which is why a `chmod` failure is non-fatal.
+
 ## Security model
 
 Scope is a homelab: a single trusted operator, not untrusted tenants.
