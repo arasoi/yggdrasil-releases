@@ -261,9 +261,12 @@ optional cluster name field, where a new name creates a cluster bound to the cho
 existing name on that node joins it, and an existing name bound to a different node is
 rejected with a message naming the right one.
 
-`/clusters` lists every cluster with its node and members, and is where a cluster is managed
-(ADR-066): rename it, take a member out, or delete it. **Joining is still only possible through
-server creation** — this page can empty a cluster but not fill one.
+`/clusters` lists every cluster with its node and members; `/clusters/{id}` is the cluster
+itself (ADR-080) and is where one is managed (ADR-066): rename it, take a member out, back it
+up, set its schedule, or delete it. It needs no new query — the same data the list already
+gathers for every cluster, gathered for one — and shows its members as the same art cards the
+fleet uses, since a cluster's members are peers with their own pages. **Joining is still only
+possible through server creation** — this page can empty a cluster but not fill one.
 
 Every operation there is guarded by something the schema does not enforce, because
 `servers.cluster_id` has no foreign key: deleting a cluster is refused while it still has
@@ -699,17 +702,29 @@ settings that belong to a host rather than to a server: its port range and its a
 Nodes list keeps the port-range form as a shortcut, so that form now renders errors back to
 whichever page submitted it.
 
-**The servers list is grouped by node**, one collapsible group per host, with that host's
-clusters nested inside it and its unclustered servers below them. "What is where" is the
+**The servers list is grouped by node**, one collapsible group per host. "What is where" is the
 question that page is most often opened to answer, and a flat list answered it only by
 reading a Node column on every row — so that column is gone, since the group heading now
-says it once. A collapsed group still carries its host's summary: running count, anything
-needing attention, and whether the agent is connected. Only nodes with servers become
-groups. Creating a server is one **New server** button that opens a chooser — from a seed,
+says it once, alongside that host's running count, anything needing attention, whether the
+agent is connected, and the capacity its agent reports at every handshake. Only nodes with
+servers become groups. Creating a server is one **New server** button that opens a chooser — from a seed,
 or from a container image — and lands on the page for whichever was picked (`/servers/new-from-seed`
 or `/servers/new-from-image`); the image form used to sit permanently expanded at the bottom
 of the list, which put a form nobody was filling in below every server they were looking at.
 See ADR-054's amendment.
+
+**Each group leads with art cards** (ADR-080): a seed's own banner, its state as a chip on the
+artwork, its facts and its player count. Up to three, with everything past that falling back to
+the rows this page has always had — the cards are a summary, and past three they become a
+scroll. This is what finally consumes the artwork ADR-077 and ADR-079 built the whole path for;
+before it, a banner appeared on exactly one page as a 120px inline image. Most seeds ship none,
+so the card falls back to a striped placeholder carrying the seed's own glyph, and that is the
+path built first.
+
+**A cluster is one card, not one per member.** Its members are reached through it, at
+`/clusters/{id}` — the page ADR-066 built rename, remove-member and delete without, putting all
+three in a table cell because there was nowhere else. Its card carries a stacked-sheet edge, a
+segmented run bar with one segment per member, and aggregate counts.
 
 Run state is carried by colour as well as text: a badge plus a stripe on the row's leading
 edge, both chosen by one Go method so nothing can disagree about what state a server is in.
@@ -718,10 +733,32 @@ idle is muted, so a healthy fleet reads calm and only trouble draws the eye — 
 case the stylesheet is written for. Colour stays the only swappable axis (Frost / Grove /
 Ember), and semantic colour sits outside the palettes entirely.
 
-**Those badges, stripes and counts move on their own.** State changes are pushed to every open
+**A seed contributes one more colour, and only a hue.** `internal/control/branding.Accent`
+takes the dominant hue of a seed's own artwork and clamps lightness and chroma to fixed
+constants, so a game's colour can mark its own card's edge, its run bar and its page's active
+tab without ever competing with the product accent or with semantic state colour. It is
+**derived, never stored**: the bytes already answer it, and a persisted copy would be a second
+writer able to drift from the image beside it (ADR-071). Memoised per seed, forgotten on
+reload, and empty for a seed with no artwork or no usable hue — which the stylesheet's own
+`--game: var(--accent)` default covers with no branch in any template. `branding.accent`, the
+field a seed *declares*, stays reserved and applied by nothing (ADR-077 §14).
+
+**A server's and a cluster's page open with an art band**: the same banner, blurred on a layer
+of its own behind a fixed scrim, with the tab strip at the top and the identity block, endpoints
+and lifecycle controls on it. The scrim is never tuned per seed — a seed can ship any artwork,
+and the contrast guarantee has to hold for all of them.
+
+**Headline numbers are stat tiles** rather than a line of body text: the fleet's counts, and the
+live CPU/memory/network readings on a server and in the console's rail. The live fragment
+carries its own grid, since `stats.js` replaces that element's contents wholesale and a grid
+declared outside it would not survive the swap; it auto-fits, so one piece of markup is a row on
+one page and a stack on the other.
+
+**Those badges, stripes, cards and counts move on their own.** State changes are pushed to every open
 tab and the page re-reads itself (ADR-058, "Live state" above) — which is what makes the
 wall-mounted case actually work, rather than showing whatever was true when someone last
-pressed reload.
+pressed reload. The art band is deliberately outside every live region, for the same reason the
+stats and graphs panels are: a swap on every event would restart the image load each time.
 
 ## Seeds
 
