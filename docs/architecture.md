@@ -1083,6 +1083,21 @@ nothing downstream cares. Each discriminated block (an install step's `op`, a se
 destination, a control's `type`) reads only the fields its selected case accepts, because the form
 renders them all and hides the rest, and `Validate` rejects a field that does not belong.
 
+**Branding images are uploaded, fetched from a URL, or taken from Steam**, and land in the seed's
+own bundle directory (`internal/control/branding`) — so publishing the seed carries the artwork to
+everyone who installs it, which is what makes this worth storing rather than hotlinking. Steam is
+not a third mechanism: it resolves an app id to the store page's header image and then takes the
+URL path. The app id is its own field rather than the install step's, because they are often
+different — Valheim's dedicated-server tool has no store page while its base game does.
+
+The bytes decide the filename: a raster is decoded with the standard library and stored as
+`<kind>.<detected ext>`, never as what the upload was called, so a file named `icon.png` whose
+contents are not a PNG is refused rather than served as one from this origin. **SVG is refused on
+this path and still served when hand-placed** — an operator putting one in their own bundle has
+made a local decision about their own control plane, whereas a published bundle's images are served
+from *other* operators' origins. Nothing is written until every fetch has succeeded, so a save
+cannot leave a manifest naming an image that was never retrieved.
+
 `guidedEditable` and its allowlist stay, at full coverage. What they guard is not today's gaps but
 the *next* field added to `seed.Seed`: one that nobody has taught the form about is unrepresentable
 by default, so a seed using it falls back to the raw-YAML pane rather than being saved without it.
