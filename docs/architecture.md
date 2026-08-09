@@ -603,17 +603,32 @@ reuses that same session rather than opening a second one, so this uses the prop
 already relies on rather than adding a second mechanism.
 
 `internal/agent/logscan` assembles complete lines from those chunks — a container write splits
-anywhere, so matching raw chunks would miss any value straddling a read — and matches them
-against the seed's `logs.values` rules. Each match travels up as a `ServerFact`, which the
+anywhere, so matching raw chunks would miss any value straddling a read — and matches them against
+all four kinds of rule a seed can declare: `logs.values`, `logs.events`, a readiness pattern and a
+crash pattern. One assembler rather than four, since a second would be a second place for the
+straddled-line bug to live. Each match travels up as a `ServerFact`, which the
 control plane stores per `(server, name)` and shows on the server's page and its row in the
 fleet list. Facts are discarded the moment a server stops: a Valheim join code from a previous
 run is not stale but *wrong*, and would send players to a session that no longer exists.
 
-**Readiness and crash detection are still not driven by logs.** `logs.ready`/`logs.crash` are
-declared by four bundled seeds, carried through parsing, and acted on by nothing; readiness is
-still applied right after start. Making it depend on a match changes when every server reports
-running — a seed whose pattern never matched would strand a healthy server in `starting` — so
-it is deliberately left for its own decision (ADR-067).
+**Readiness and crash detection are both log-driven where a seed asks for it**, each behind a
+declared mode with a safe default (ADR-077). Readiness is covered above. A `crash: {mode: log}`
+rule exists for the failure exit codes cannot see — ADR-047 records ARK hanging indefinitely
+inside Crashpad with the process alive and nothing exiting — and a match **kills the pod**, so the
+ordinary exit path does the transition and the restart with the matched line as the reason. One
+route to crashed, not two; marking a server crashed while its containers run would be a state the
+restart policy could not act on. The signal goes to the supervisor rather than being turned into a
+state change by whatever read the line, because whether a line means anything depends on what the
+server is doing: a shutdown message during a deliberate stop is not a crash. `mode: none` is the
+default, and the bar for adopting a pattern is higher than readiness's — a wrong readiness pattern
+delays a server, a wrong crash pattern stops a healthy one, which is why neither bundled seed that
+once carried a candidate still declares it as a field.
+
+**A seed can also recognise well-known events** — `logs.events`, `join` and `leave` — which
+maintain a player list on the server's page and a count on the fleet list. Observed state and
+nothing else: derived from what the game printed, discarded when the server stops for the same
+reason its facts are, and depended on by nothing. The count is shown only for a seed that declares
+such a rule, since "0 players" on a server nobody is counting is a confident wrong answer.
 
 **Files** (phase 3) — each server gets a sandboxed directory on its node, rooted under the
 agent's `servers_dir` and created on first use. `internal/agent/files.Root` resolves every
@@ -625,6 +640,18 @@ hub's `Call` rather than multiplexed by stream_id — a directory listing is a s
 answer, not an ongoing session. The web UI is plain server-rendered forms: a listing with
 breadcrumbs, a textarea editor for files under 1 MiB, and an upload form, no JS framework
 needed (ADR-006).
+
+A seed may put paths out of reach with `server.file_denylist`, for the files it regenerates itself:
+without it the browser invites an edit the next rebuild silently discards. It is not a security
+boundary — the sandbox is, and containment is unconditional — so a denied entry is omitted from a
+listing rather than shown and refused, and it is enforced on the agent as well as hidden in the UI
+because a node must not depend on the thing sending it commands being correct.
+
+A seed may also mark a config file `importable`, which lets an operator read it back off the node
+and adopt the values the seed recognises onto that server's stored settings — the migration path
+for a server somebody configured by hand, or a file edited before the seed had a setting for that
+key. Only values that differ are adopted, and a file that could not be read whole contributes
+nothing, which is the same judgement patching makes in the other direction.
 
 **Bulk data** is always proxied through the control plane; direct browser-to-agent transfer
 was considered and rejected (ADR-011). Uploads and downloads go through the same JSON-free
@@ -698,18 +725,29 @@ pressed reload.
 
 ## Seeds
 
-A seed is YAML, not code, and now describes install strategy, pod composition, and
-cluster support. Sketch:
+A seed is YAML, not code, and describes install strategy, pod composition, game
+configuration, and cluster support. **The format is specified in
+[seed-spec.md](seed-spec.md)** (schema 3, ADR-077); `internal/seed/schema.json` is the
+generated machine-readable version and [seed-fields.md](seed-fields.md) the generated field
+list. `internal/seed.Validate` is normative — the cross-field rules that matter most (exactly
+one primary container, a derived port naming a non-derived sibling, a template that must
+dry-render) cannot be expressed in a schema, so both artifacts are generated from the Go types
+with a test that fails when the committed copies drift.
+
+Sketch:
 
 ```yaml
 id: ark-survival-ascended
-schema: 1
+schema: 3
+version: "4.0.0"
 
 install:
   shared: true              # one install, many servers
-  method: steamcmd
-  app_id: 2430930
   mount: { path: /game, mode: ro }
+  image: { base: steamcmd } # required only because a steamcmd step needs a container
+  steps:
+    - op: steamcmd
+      app_id: 2430930
 
 server:
   writable_paths:           # bind-mounted over the read-only install
@@ -724,21 +762,36 @@ cluster:
 containers:
   - role: game
     primary: true
-    image: yggdrasil/ark-asa:latest
+    image: { base: steamcmd-proton }   # or a verbatim `ref:` for a third-party image
     command: "...?Map={{.Vars.map}}?..."
     ports:
-      - { name: game,  protocol: udp, default: 7777 }
-      - { name: query, protocol: udp, default: 27015 }
-      - { name: rcon,  protocol: tcp, default: 27020 }
+      - { name: game,  protocol: udp, default: 7777,  kind: game }
+      - { name: query, protocol: udp, default: 27015, kind: query }
+      - { name: rcon,  protocol: tcp, default: 27020, kind: rcon }
 
-variables:
+variables:                  # shape how the server is built; changing one rebuilds the pod
   - { name: map, default: TheIsland, editable: true }
 
+settings:                   # the game's own configuration, each declaring where it lands
+  - name: max_players
+    type: number
+    min: 1
+    max: 200
+    step: 1
+    default: "70"
+    to: { file: GameUserSettings.ini, key: "/Script/Engine.GameSession/MaxPlayers" }
+
+ready:                      # a declared mode, not a bare substring
+  mode: log
+  pattern: "has successfully started!"
+  timeout: 900s
+
 logs:
-  ready: "Server has completed startup"     # declared, not yet acted on
-  crash: "Fatal error"                      # declared, not yet acted on
-  values:                                   # extracted and shown (ADR-067)
-    - { name: join_code, pattern: "join code ([0-9]+)" }
+  values:                   # extracted and shown (ADR-067)
+    - { name: join_code, label: "Join code", fleet: true, pattern: "join code ([0-9]+)" }
+  events:                   # named groups, fixed vocabulary; maintains a player list
+    - { event: join,  pattern: '(?P<player>\S+) joined the game' }
+    - { event: leave, pattern: '(?P<player>\S+) left the game' }
 
 stop:
   command: "DoExit"
@@ -749,8 +802,122 @@ backup:
   include: [saved, config]
 ```
 
-ARK's three ports are all independently allocated — each gets its own preferred default and is
-scanned from the node's port range if that default is taken. Some games hardcode a relationship
+**An install is an ordered list of typed operations**, not a method enum. Schema 2 had
+`method: download|steamcmd` plus five conditionally-required siblings, which could express
+exactly two installs — a game needing fetch-then-extract-then-chmod had none. Arbitrary shell
+was rejected (it would make a seed code, and no form can generate it), so the ops are a fixed
+vocabulary: `download`, `extract`, `steamcmd`, `mkdir`, `copy`, `move`, `chmod`, `write`,
+`patch`, plus three reserved lifecycle ops for a game that must boot once to write its own
+config. `install.image` is required exactly when a step needs a container and forbidden
+otherwise, and a shared install may not reference per-server data at all — it is mounted
+read-only by every server referencing it.
+
+The list travels to the agent on `InstallStart` and `internal/agent/install` executes it. Two
+things deliberately do **not** travel, for the same reason: a step's `if` is evaluated by the
+control plane and a false step is simply not sent, and a symbolic base image is resolved by the
+control plane — so the agent still needs no access to a seed's variables or to the release
+channel (ADR-012). The old `method`/`url`/`archive`/`filename`/`app_id` fields are still written
+alongside the steps for one release, so a protocol 1 agent installs exactly as it did; the
+negotiated protocol is 2 (ADR-014's N-1 window, which until now had no real history to mean
+anything against). `internal/configfile` is the shared key-patching implementation behind both
+the `patch` step and a config file managed `patch`, so a key path means the same thing at
+install time and at provision time.
+
+**Variables and settings are separate blocks.** A variable reaches a command, an env value, an
+install step or a mount, so changing one rebuilds the pod. A setting is written into the game's
+own configuration and *declares its destination* — a config file key or an env var — so a game
+with forty-four documented keys needs no template line per key. Both embed one `Control` type,
+which is what makes the split free in the UI: `varfields.html` renders either kind. Settings
+also carry a tri-state absent/empty/set, so a game whose image owns and rewrites its own config
+file can be told to leave a key alone, which schema 2 could not express.
+
+`seed.ResolveDestinations` works out where every setting goes, once per rebuild, and both the pod
+builder and the config writer read from it — so a container's environment and a config file
+cannot disagree about whether a setting is present. A server's settings are stored in their own
+`servers.settings` column, holding the operator's own choices and never the seed's defaults:
+filling defaults in on write would collapse the tri-state permanently on first save.
+
+**A config file declares how it is managed**: `always` rewrites it wholesale (the default, and
+schema 2's only behaviour), `once` writes it only if absent, and `patch` sets just the keys the
+seed and its settings name, through `internal/configfile`. Patching is the only thing on the
+provisioning path that reads from a node, and a read that fails or truncates degrades to writing
+the declared keys alone rather than failing the rebuild.
+
+**Readiness is a declared mode** — `immediate` (the default, and what every seed did before),
+`log`, `port`, or `healthcheck` — and the supervisor honours it. Schema 2's `logs.ready` was a
+substring four bundled seeds declared and nothing ever matched, because making readiness depend on
+a match risked stranding a healthy server in `starting` forever (ADR-067). The mode is what makes
+it safe: opting in is deliberate, and a timeout reports the server running anyway *with a reason*
+rather than leaving it in limbo. `mode: port` needs no game-specific knowledge, which makes it the
+right first choice for a game added blind.
+
+`immediate` is the same call at the same point it always was, and the control plane sends no
+`ReadySpec` at all for a seed that asks for nothing else — so such a seed's pod spec is unchanged.
+A log pattern is matched by `internal/agent/logscan`, which already assembles lines out of chunks
+for log-value extraction, so there is one line assembler rather than two. Only the paths that
+restart the *primary* re-establish readiness; bringing a crashed sidecar back does not, since the
+pod already satisfied its rule and a startup line will not be printed again.
+
+**Container images may be named symbolically.** `image: {base: steamcmd-proton}` resolves
+through the control plane to the right registry, owner and channel at provision time; a
+verbatim `ref:` still works for any third-party image. This exists because ADR-073 recorded a
+real base-image fix that could not reach a node: a seed pinning `release-latest` is stuck on a
+tag built only from `main`.
+
+Each base carries a descriptor at `images/<name>/base.yaml`, embedded by `images/library.go`,
+recording what it provides, which architectures it is published for, how it runs, and which
+environment variables it honours. The registry name comes from that descriptor rather than from
+assembling `"base-" + name`, so a base whose directory and seed-facing name diverge still
+resolves to something that exists. Only the descriptors are embedded — a Dockerfile stays data a
+human or CI builds, the same line ADR-049 draws for a seed's own `image/` directory. An unknown
+base is a warning at load and an error at provision, never a load failure, since adding an image
+would otherwise make an older binary reject a newer seed.
+
+**A seed can carry its own branding**, served from `GET /seeds/{id}/assets/{kind}` where kind is
+`icon`, `logo` or `banner`. The request names a *kind* and the seed says which file that is, so
+no request-supplied path reaches the filesystem at all — a stronger guarantee than sandboxing
+one, and a real difference, since a bundle can also hold an install script or a Dockerfile.
+Bytes come from whichever layer the effective copy of the seed came from, highest first, matching
+`seed.Merge`. Responses carry a restrictive CSP and `nosniff`: an SVG is a document that can
+carry script and this one is served from the control plane's own origin. A server's page leads
+with the banner (or the logo, when it declares no banner); `branding.accent` is reserved and
+applied by nothing, because the accent tokens travel as a set and a seed supplying one of the
+three can make its own page unreadable.
+
+**An addon is an optional container** — `containers[].optional`, a map renderer or an admin UI —
+shipped with the seed and provisioned only if the operator enables it. All three port paths take
+their container list from one `enabledContainers` function, so a disabled addon is invisible to
+allocation at creation, to `ensureContainerPorts` on rebuild, and to the pod spec by
+construction; the alternatives are an allocation nothing publishes, which reads as drift on every
+settings save, or a container port taken from an allocation that does not exist. Ports are
+released on the next rebuild rather than at the moment of the save, so the invariant holds for a
+server whose earlier save failed halfway. Validation carries the rest: an addon cannot be
+primary, nothing required may depend on one, and no template may reference one's port.
+
+**A port declares what it is for** (`kind: game|query|rcon|web|voice|other`), and a seed may
+declare a **connect** block — a URI a client understands, an address to copy, or both. It is
+rendered per request rather than stored, because it templates over the node's address, which can
+change and can legitimately be unknown (ADR-065); with no address known it renders nothing at
+all, since a bare port reads as incomplete and a URI with an empty host does not.
+
+**A seed can carry its own migrations.** Stored values are keyed by name, so renaming a variable
+silently discards what every operator chose — ADR-074 declined to rename Valheim's
+`crossplay_flag` for exactly that reason, since losing the stored value would have turned
+crossplay back on wherever it had been turned off. `renamed_from` and a `migrations:` block
+(`rename`/`drop`/`rewrite`/`promote`) carry values forward, with **nothing recorded per server**:
+every operation is idempotent by construction, and validation enforces that rather than trusting
+an author to be careful.
+
+**A schema 2 document still loads.** It is up-converted before validation, so a catalog bundle an
+operator already installed keeps working and there is exactly one shape in memory. The converter
+deliberately drops `logs.ready`/`logs.crash` rather than translating them: nothing consumed them,
+so dropping changes no behaviour, while translating would make readiness depend on a substring
+nobody verified.
+
+ARK's three ports are all independently allocated — each scanned from the node's port range,
+which since ADR-061 is the whole candidate pool: a `default:` documents the game's conventional
+port and the authoring form's preview value, and is never offered as an allocation preference.
+Some games hardcode a relationship
 between two ports instead: Valheim's Steam query port is always `game_port + 1` inside the
 binary, with no flag to set it separately. `offset_from`/`offset` express that (ADR-048) —
 mutually exclusive with `default`, since a derived port has no preferred value of its own:
@@ -931,14 +1098,24 @@ new `yggd` release — so either `VERSION` climbed because a YAML file changed, 
 seeds drifted behind the repository. Seeds now have their own release channel.
 
 `.github/workflows/seeds.yml` is triggered by a **path filter over `seeds/`**, runs
-`cmd/ygg-seedpack`, and publishes to release tags of its own — `seeds-develop-latest`,
+`ygg-seed pack`, and publishes to release tags of its own — `seeds-develop-latest`,
 `seeds-qa-latest`, `seeds-release-latest` — floating per channel the way ADR-038's binary
 channels do, in the same public repository. Separate tags are the point rather than tidiness:
 sharing release.yml's would re-couple exactly what this separates. Each seed carries its own
 `version:`, and the packer refuses one `version.Compare` cannot order, since publishing that
 produces a seed nobody could ever be told to update. Every bundle is loaded through
 `internal/seed` before packing, so a seed `yggd` could not load fails in CI rather than on an
-operator's control plane.
+operator's control plane. The same workflow runs `ygg-seed lint` first, which reports the rules
+validation deliberately allows without failing a publish over them.
+
+**`cmd/ygg-seed` is the tool the format exists for.** It scaffolds a bundle that already
+validates, loads one exactly as `yggd` does, lints it, migrates a schema 2 manifest to schema 3
+in place (on a `yaml.Node` tree, so comments and key order survive), packs a catalog, and imports
+a Pelican or Pterodactyl egg best-effort — reporting everything it could not carry rather than
+dropping it, since an egg's install is a bash script and a seed's is a fixed vocabulary of typed
+operations. `ygg-seedpack` is a thin alias for its `pack` subcommand. Nothing in it reimplements
+the format: a seed it accepts is a seed `yggd` accepts, which is the property that makes it worth
+having at all.
 
 Seeds therefore load in **three layers** (`seed.Merge`, in order):
 
