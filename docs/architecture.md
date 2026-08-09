@@ -713,13 +713,14 @@ or `/servers/new-from-image`); the image form used to sit permanently expanded a
 of the list, which put a form nobody was filling in below every server they were looking at.
 See ADR-054's amendment.
 
-**Each group leads with art cards** (ADR-080): a seed's own banner, its state as a chip on the
-artwork, its facts and its player count. Up to three, with everything past that falling back to
-the rows this page has always had — the cards are a summary, and past three they become a
-scroll. This is what finally consumes the artwork ADR-077 and ADR-079 built the whole path for;
-before it, a banner appeared on exactly one page as a 120px inline image. Most seeds ship none,
-so the card falls back to a striped placeholder carrying the seed's own glyph, and that is the
-path built first.
+**Each group is a grid of art cards** (ADR-080): a seed's own banner, its state as a chip on the
+artwork, its facts and its player count. Every entry is a card, and how many fill a row is the
+grid's decision rather than a constant — one column at 420px, three at 1440, seven at 2560 —
+because the number that fills a row depends on the viewport and the control plane cannot know
+it. The band is height-capped so a wide card does not become mostly artwork. This is what
+finally consumes the artwork ADR-077 and ADR-079 built the whole path for; before it, a banner
+appeared on exactly one page as a 120px inline image. Most seeds ship none, so the card falls
+back to a striped placeholder carrying the seed's own glyph, and that is the path built first.
 
 **A cluster is one card, not one per member.** Its members are reached through it, at
 `/clusters/{id}` — the page ADR-066 built rename, remove-member and delete without, putting all
