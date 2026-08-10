@@ -1140,9 +1140,27 @@ renders them all and hides the rest, and `Validate` rejects a field that does no
 **Branding images are uploaded, fetched from a URL, or taken from Steam**, and land in the seed's
 own bundle directory (`internal/control/branding`) — so publishing the seed carries the artwork to
 everyone who installs it, which is what makes this worth storing rather than hotlinking. Steam is
-not a third mechanism: it resolves an app id to the store page's header image and then takes the
-URL path. The app id is its own field rather than the install step's, because they are often
-different — Valheim's dedicated-server tool has no store page while its base game does.
+not a third mechanism: it resolves an app id to an image and then takes the URL path. The app id is
+its own field rather than the install step's, because they are often different — Valheim's
+dedicated-server tool has no store page while its base game does, and the same holds for ARK
+(2430930 versus 2399830).
+
+**Which image is the operator's choice, not the app id's.** Each slot offers a gallery of every
+piece of artwork Steam actually has, from two sources that are each incomplete alone: the Store
+API's own fields (header, the capsules, the page background) and the well-known per-app CDN paths
+it does not return — the portrait capsule, the wide hero, and the transparent `logo.png`, which are
+the three that fit a seed's own icon/logo/banner slots at all. Taking the header for every slot,
+which is what this did before, put a 460×215 banner in the icon and the logo.
+
+Those CDN paths are a convention rather than a contract, which ADR-051 treated as disqualifying
+when it rejected SteamDB. What makes them acceptable here is that **nothing depends on one
+existing**: every candidate is probed with a HEAD before it is offered, so a Valve change shows
+fewer choices rather than breaking the picker or the save — and an app with no store page, which
+is the ordinary case for a dedicated-server tool app, correctly yields an empty gallery that says
+why. The gallery is ordered by which slot an image suits and never filtered, since the shape is a
+suggestion and an operator who wants the hero art as an icon knows something the heuristic does
+not. With nothing picked the header is still taken, so a save that never opened the gallery — or
+one made with JavaScript disabled — behaves exactly as it did before.
 
 The bytes decide the filename: a raster is decoded with the standard library and stored as
 `<kind>.<detected ext>`, never as what the upload was called, so a file named `icon.png` whose
