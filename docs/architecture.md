@@ -352,11 +352,15 @@ reconnect reporting the new version, or fails after 5 minutes with no such recon
 
 Proven end-to-end against a real control plane and a real agent process, including the failure
 path (a tampered checksum is rejected before anything is installed) — see
-`internal/integration/agent_update_test.go`. What is not yet proven is N-1 compatibility
-against a *real* older protocol version, since none exists yet (`Protocol == MinProtocol == 1`
-today): the mechanism is tested against a hypothetical version range instead
-(`internal/integration/n1_compat_test.go`), the same honesty the ARK and Dune Awakening entries
-below already apply to their own exit criteria.
+`internal/integration/agent_update_test.go`. N-1 compatibility now has a **real** range to mean
+something against, which it did not when this was written: ADR-077's install-steps work took the
+negotiated protocol to 2 while `MinProtocol` stayed 1, so a protocol 1 agent genuinely exists as
+a case rather than a hypothesis — it ignores `InstallStart.steps`/`.image` and reads the older
+method/url/archive/filename/app_id fields a current control plane keeps writing for one release.
+What is still untested is that pairing against a real *older binary*: the negotiation logic is
+exercised against constructed version ranges (`internal/integration/n1_compat_test.go`) rather
+than against a released agent built before the bump, which is the same honesty the ARK and Dune
+Awakening entries below apply to their own exit criteria.
 
 ### `yggd` watches its own release channel and can self-update
 
@@ -1005,16 +1009,23 @@ Placement scheduling is deferred until a mixed fleet exists (ADR-016).
 The bundled seeds deliberately sit at opposite ends of ADR-018's install model, and all run
 end-to-end from the UI with no game-specific Go code:
 
-Both Minecraft seeds expose their full documented configuration surface (ADR-076) — 44
-settings for Paper, 26 for Bedrock — grouped, typed, and with settings that depend on another
+Both Minecraft seeds expose their full documented configuration surface (ADR-076) — 44 controls
+for Paper, 26 for Bedrock — grouped, typed, and with settings that depend on another
 (`rcon.password`, a resource pack's checksum) hidden until the setting they depend on is on.
 That dependency is declared by the seed as `show_if`, not encoded in the UI, so a new game
 stays a data change. A hidden control still submits, so visibility never becomes something the
 control plane has to reason about.
 
-- **Paper** has a non-shared `install` (`method: download`) and a `config.files` block that
-  renders `eula.txt` and `server.properties` from real template files in its bundle directory
-  (`ConfigFile.SourcePath`, ADR-049) — the licence-gate row in the table above.
+Which of the two blocks those controls live in still differs between them, and that is a real
+difference rather than an inconsistency: Bedrock's are 25 `settings` with `env` destinations plus
+one variable (the build its image downloads), while Paper's 44 are all still `variables` rendered
+through a whole-file `server.properties` template. Converting Paper is its own seed release —
+44 keys is where `manage: patch`'s read-back-from-node failure mode actually lives (ADR-077).
+
+- **Paper** has a non-shared `install` (one `download` step) and a `config.files` block that
+  renders `eula.txt` (`manage: once`, so an operator's edit survives) and `server.properties`
+  from real template files in its bundle directory (`ConfigFile.SourcePath`, ADR-049) — the
+  licence-gate row in the table above.
   `internal/agent/install` fetches a single file or an archive (`zip`/`targz`) and unpacks it
   with the same zip-slip protection `internal/agent/files` applies to operator-supplied paths
   (ADR-033), applied here to archive-supplied ones. Rendered config files are pushed with the
@@ -1027,18 +1038,23 @@ control plane has to reason about.
   writable paths for saves and config, and a `/cluster` mount with the cluster id and
   directory override passed to the primary container. It is the bundled example for the
   one-install-many-maps workflow phase 5 is building toward. Its primary container runs on
-  `images/base-steamcmd-proton` and invokes the game through `umu-run`, plus a fourth writable
-  path (`compatdata`) for the Wine prefix that runs under — see phase 5's status below for what
-  is and is not yet proven about that path.
+  `images/base-steamcmd-proton` and invokes the game through `ygg-proton`, the wrapper inside
+  that image that owns every Proton invocation detail so the seed's command stays one readable
+  line, plus a fourth writable path (`compatdata`) for the Wine prefix that runs under — see
+  phase 5's status below for what is and is not yet proven about that path.
 - **Valheim** (`seeds/library/valheim/seed.yaml`) is the SteamCMD install path proven against a real
   game end-to-end, not a synthetic stand-in: it has an official Linux dedicated server binary
   (unlike ARK ASA), so no Proton wrapper is needed, and a real run installed, provisioned,
-  started, and matched its `logs.ready` rule against genuine stdout. It is also the first seed
+  started, and matched its readiness pattern against genuine stdout — declared as
+  `ready: {mode: log}` since ADR-077, where it had been a `logs.ready` substring nothing read.
+  It is also the first seed
   to use an offset-derived port (`query`, `game_port + 1`, ADR-048) — Valheim's Steam query
   port hardcoded with no independent flag, which is what that ADR's schema addition exists for.
   It is now also the only seed declaring a `logs.values` rule, for the six-digit join code the
-  game prints and nothing else knows (ADR-067), alongside a `crossplay_flag` variable defaulting
-  to on — without `-crossplay` the game never prints a code at all, so the rule and the flag
+  game prints and nothing else knows (ADR-067), alongside a `crossplay` variable defaulting
+  to on — `crossplay_flag` until ADR-077 renamed it behind a `renamed_from`, which is what kept
+  every operator's stored choice rather than turning crossplay back on wherever it was off.
+  Without `-crossplay` the game never prints a code at all, so the rule and the flag
   travel together. **That rule is now verified against a real crossplay server** (ADR-073),
   closing the caveat this entry previously carried: a real run reached
   `Session "..." registered with join code 105503` and the pattern extracted it. The same run
@@ -1593,8 +1609,9 @@ entrypoint (ADR-047's amendment has the full account, including two bugs — a w
 and a root-vs-non-root permission error — that only surfaced by actually running it, not from
 reading the Dockerfile). The bundled `ark-survival-ascended` seed now points its primary
 container at `base-steamcmd-proton` directly (no separate `yggdrasil/ark-asa` image — nothing
-ARK-specific belongs baked into one) and invokes `umu-run` against ARK ASA's documented Windows
-binary path.
+ARK-specific belongs baked into one) and invoked `umu-run` against ARK ASA's documented Windows
+binary path — the invocation that later moved behind `ygg-proton`, for the reasons the rest of
+this entry works through.
 
 That path is no longer just documented, either: a real `+app_update 2430930` (~12 GB) has
 actually been fetched and run against this image. The exe path was exactly right, and the engine
@@ -1650,12 +1667,13 @@ one does.
 and register a binary, click Update on a connected node, and watch a real agent process
 download, verify, install, drain, exit, and — restarted the way systemd would — reconnect
 running the new version with the job resolving automatically. See "Agent updates are pushed
-from the UI" above for the full sequence and ADR-040/ADR-041 for the design. What is not yet
-provable is the exit criterion's N-1 half against a *real* older protocol version, since one
-does not exist yet (`Protocol == MinProtocol == 1`) — tested against a hypothetical version
-range instead, the same kind of stand-in phases 5 and 6 use for a real ARK image and a real
-Dune Awakening image respectively. The exit criterion stays open until a genuine version bump
-gives N-1 something real to mean.
+from the UI" above for the full sequence and ADR-040/ADR-041 for the design. The exit criterion's
+N-1 half **has since gained the real history it was waiting for**: the protocol is 2 with
+`MinProtocol` 1, so "a current control plane talking to a protocol 1 agent" is a live
+configuration rather than the hypothesis this entry used to describe. It stays open on a narrower
+point than before — the pairing is tested against constructed version ranges rather than against
+an agent binary actually built before the bump, which is the one thing a released `qa` or `main`
+artifact from before ADR-077 could now supply.
 
 **Phase 8 is done, against a criterion that was reworded to what the phase actually proves.**
 It originally read "restore a Dune pod including its database", and that sentence was met
