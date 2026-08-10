@@ -1163,13 +1163,17 @@ everything below follows from it.
 `publish.ResolveTarget` still refuses `arasoi/yggdrasil-releases` as a checked error,
 case-insensitively, and refuses it even when set deliberately — but for the narrower reason that
 it is the one place where a wholesale release replacement takes out the distribution itself. It
-is deliberately **not** "the repository this control plane reads its catalog from": that is now
-the ordinary case, since whoever maintains a catalog authors seeds and publishes the result they
-themselves consume. What makes that safe is **one writer per release tag**, which is why
-`.github/workflows/seeds.yml` no longer publishes — it lints and packs `seeds/library` as a
-check, since that set is still what a fresh install embeds and so has to stay loadable. For an
-operator who is not the maintainer, GitHub's own permissions are the boundary, and the token's
-Test action asks exactly that before they press anything.
+is deliberately **not** "the repository this control plane reads its catalog from": that is the
+ordinary case for whoever maintains a catalog. For an operator who is not the maintainer, GitHub's
+own permissions are the boundary, and the token's Test action asks exactly that before they press
+anything.
+
+**This path is for an operator with no CI**, or one publishing a catalog for their own fleet from
+a seeds directory that is not a git clone at all. Where CI publishes — as it does for the
+project's own catalog (ADR-081's amendment) — it is the one writer, and `seeds.publish_repo` is
+left **unset**, which renders the Publish button with "Set a publishing repository in Settings
+first" and makes it incapable of becoming a second writer. Inert by configuration rather than by
+removal.
 
 Packing runs first and completely, before anything on the remote is touched. `seedpack` loads
 every bundle through the strict loader and rejects a version `version.Compare` cannot order, so a
@@ -1216,21 +1220,31 @@ seeds drifted behind the repository. Seeds now have their own release channel.
 
 A catalog lives on release tags of its own — `seeds-develop-latest`, `seeds-qa-latest`,
 `seeds-release-latest` — floating per channel the way ADR-038's binary channels do, in a
-repository of its own (`arasoi/yggdrasil-seeds`, ADR-081). Separate tags *and* a separate
-repository are both the point rather than tidiness: sharing release.yml's tags would re-couple
-exactly what this separates, and sharing its repository would mean a catalog publish replacing a
-release that carries binaries. Each seed carries its own `version:`, and the packer refuses one
+repository of its own (`arasoi/yggdrasil-seeds`, ADR-081), which carries the same three branches
+and publishes each one's channel on push. Separate tags *and* a separate repository are both the
+point rather than tidiness: sharing release.yml's tags would re-couple exactly what this
+separates, and sharing its repository would mean a catalog publish replacing a release that
+carries binaries. Each seed carries its own `version:`, and the packer refuses one
 `version.Compare` cannot order, since publishing that produces a seed nobody could ever be told
 to update.
 
-**The catalog is published by a control plane, not by CI.** A release tag can have exactly one
-writer, and two producers feeding one floating tag would clobber each other on every push — so
-`.github/workflows/seeds.yml` lints and packs `seeds/library` on a **path filter over `seeds/`**
-and uploads nothing. That check still earns its place: packing loads every bundle through
-`internal/seed`, so a seed `yggd` could not load fails in CI rather than on an operator's control
-plane, and `seeds/library` remains the *embedded* set every fresh install starts with whether or
-not it is also published. `ygg-seed lint` runs first, reporting the rules validation deliberately
-allows without failing the build over them.
+**A release tag has exactly one writer**, since two producers feeding one floating tag would
+clobber each other on every push. For the project's own catalog that writer is CI **in the seeds
+repository** (`arasoi/yggdrasil-seeds`), where the branch *is* the channel: pushing to `develop`
+publishes edge, and merging into `qa` or `main` promotes it. That mapping is the reason it lives
+there rather than behind a control plane's Publish button — `internal/control/publish` takes its
+channel from the `seed_channel` setting, which has nothing to do with what is checked out, so
+branch and channel could disagree silently and promotion by merge would mean nothing. Publishing
+to its own releases also needs only `GITHUB_TOKEN`, so no personal access token exists to manage.
+
+`.github/workflows/seeds.yml` in *this* repository therefore lints and packs `seeds/library` on a
+**path filter over `seeds/`** and uploads nothing. That check still earns its place: packing loads
+every bundle through `internal/seed`, so a seed `yggd` could not load fails in CI rather than on an
+operator's control plane, and `seeds/library` remains the *embedded* set every fresh install starts
+with whether or not it is also published. `release.yml` additionally publishes
+`ygg-seed-linux-<arch>`, because the seeds repository holds seeds rather than Go source and has to
+download the packer — checksum-verified against `SHA256SUMS`, since building it there would need a
+read credential for a private repository inside a public one's CI (ADR-081's amendment).
 
 **`cmd/ygg-seed` is the tool the format exists for.** It scaffolds a bundle that already
 validates, loads one exactly as `yggd` does, lints it, migrates a schema 2 manifest to schema 3
