@@ -107,7 +107,7 @@ On **each node host**:
   the usual way.
 - systemd, to supervise the agent and restart it (`Restart=always`) if it
   ever exits. The agent does not restart itself.
-- **Nothing for SteamCMD.** A seed declaring `install.method: steamcmd` (ARK
+- **Nothing for SteamCMD.** A seed with a `steamcmd` install step (ARK
   Survival Ascended and Valheim, among the bundled ones) runs it in a
   container on the node rather than on the host (ADR-057), so there is no
   `steamcmd` binary to install and no `PATH` to arrange. What the node does
@@ -119,14 +119,14 @@ On **each node host**:
 Neither binary needs a Go toolchain, a database server, or anything else
 installed to *run* — only the container runtime and systemd above, on node
 hosts. Building from source (the alternative to downloading, below) does
-need Go 1.24+, but that is only ever required on whichever machine does the
-build.
+need the Go version in `go.mod`'s `go` directive (currently 1.26.5) or newer,
+but that is only ever required on whichever machine does the build.
 
 ## 1. Get the binaries
 
 ### Download (recommended)
 
-Every push to `develop`, `qa`, and `main` rebuilds both binaries and
+Every push to `develop`, `qa`, and `main` rebuilds the binaries and
 publishes them as a GitHub Release in the public release repository for that
 branch — see [Release channels](#release-channels) below for which one to use.
 From that repository's **Releases** page, or with `gh`:
@@ -142,7 +142,10 @@ That downloads every asset in the release: both architectures' binaries,
 `SHA256SUMS`, and `yggd.example.yaml`/`agent.example.yaml` (the config
 templates steps 2 and 3 below copy from — bundled in the release precisely
 so a binary-only download still has them, without needing a full repo
-checkout). Pass `--pattern` flags instead if you only want specific files.
+checkout). `ygg-seed` is in there too, and is the only one you do not need
+to run Yggdrasil: it is the seed authoring tool, published because the seeds
+repository's CI has to download it rather than build it from private source
+(ADR-081). Pass `--pattern` flags instead if you only want specific files.
 Substitute `arm64` for `amd64` on ARM hosts. `SHA256SUMS` covers every
 architecture in the release, so `--ignore-missing` skips the ones you did
 not download rather than failing on them. The rest of this guide refers to
