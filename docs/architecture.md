@@ -1147,20 +1147,29 @@ That pane is now a co-equal path rather than a fallback, and both routes converg
 The catalog was one-way until ADR-079: `yggd` read `seeds.json` from a floating channel tag and
 nothing could push one, so a seed authored on one control plane reached another only by copying
 files. `internal/control/publish` is the outbound half, reusing `internal/seedpack` unchanged — so
-a seed published from the UI and one published by `.github/workflows/seeds.yml` are byte-identical
-artifacts, and the version rule that makes a catalog orderable is enforced by the same code in
-both. **Only the operator layer is published**, never the merged set: republishing the bundled and
-catalog seeds an operator never wrote, under their own channel, would mean a later `yggd` upgrade
-silently changing what they were shipping.
+a seed published from the UI and one packed by CI are byte-identical artifacts, and the version
+rule that makes a catalog orderable is enforced by the same code in both. **Only the operator
+layer is published**, never the merged set: republishing the bundled and catalog seeds an operator
+never wrote, under their own channel, would mean a later `yggd` upgrade silently changing what
+they were shipping.
 
-The important part is what it refuses. Publishing replaces a channel's release wholesale — the tag
-floats, so the existing release is deleted and recreated — which means a publish aimed at the
-repository `yggd` reads its own catalog from would **destroy the catalog every other operator
-installs from**, on one click, with no undo and no local copy of what was lost.
-`publish.ResolveTarget` refuses that target as a checked error, case-insensitively, and refuses it
-even when set deliberately: this is not a preference being overruled but a request whose
-consequence is not what the words describe. The settings form and the Seeds page each refuse it
-too, so an operator hears about it when they save rather than when they press the button.
+**The catalog has a repository of its own** (`catalog.DefaultRepo`, `arasoi/yggdrasil-seeds`),
+separate from the one publishing binaries and container images. Publishing replaces a release
+wholesale — the tag floats, so the existing release is deleted and recreated — so a repository
+that is also a publish target must hold nothing else worth losing. That separation is what makes
+a catalog publishable from a running control plane at all rather than only by CI (ADR-081), and
+everything below follows from it.
+
+`publish.ResolveTarget` still refuses `arasoi/yggdrasil-releases` as a checked error,
+case-insensitively, and refuses it even when set deliberately — but for the narrower reason that
+it is the one place where a wholesale release replacement takes out the distribution itself. It
+is deliberately **not** "the repository this control plane reads its catalog from": that is now
+the ordinary case, since whoever maintains a catalog authors seeds and publishes the result they
+themselves consume. What makes that safe is **one writer per release tag**, which is why
+`.github/workflows/seeds.yml` no longer publishes — it lints and packs `seeds/library` as a
+check, since that set is still what a fresh install embeds and so has to stay loadable. For an
+operator who is not the maintainer, GitHub's own permissions are the boundary, and the token's
+Test action asks exactly that before they press anything.
 
 Packing runs first and completely, before anything on the remote is touched. `seedpack` loads
 every bundle through the strict loader and rejects a version `version.Compare` cannot order, so a
@@ -1205,16 +1214,23 @@ A seed is data, but until ADR-060 the only way a fix to a bundled one reached an
 new `yggd` release — so either `VERSION` climbed because a YAML file changed, or the shipped
 seeds drifted behind the repository. Seeds now have their own release channel.
 
-`.github/workflows/seeds.yml` is triggered by a **path filter over `seeds/`**, runs
-`ygg-seed pack`, and publishes to release tags of its own — `seeds-develop-latest`,
-`seeds-qa-latest`, `seeds-release-latest` — floating per channel the way ADR-038's binary
-channels do, in the same public repository. Separate tags are the point rather than tidiness:
-sharing release.yml's would re-couple exactly what this separates. Each seed carries its own
-`version:`, and the packer refuses one `version.Compare` cannot order, since publishing that
-produces a seed nobody could ever be told to update. Every bundle is loaded through
-`internal/seed` before packing, so a seed `yggd` could not load fails in CI rather than on an
-operator's control plane. The same workflow runs `ygg-seed lint` first, which reports the rules
-validation deliberately allows without failing a publish over them.
+A catalog lives on release tags of its own — `seeds-develop-latest`, `seeds-qa-latest`,
+`seeds-release-latest` — floating per channel the way ADR-038's binary channels do, in a
+repository of its own (`arasoi/yggdrasil-seeds`, ADR-081). Separate tags *and* a separate
+repository are both the point rather than tidiness: sharing release.yml's tags would re-couple
+exactly what this separates, and sharing its repository would mean a catalog publish replacing a
+release that carries binaries. Each seed carries its own `version:`, and the packer refuses one
+`version.Compare` cannot order, since publishing that produces a seed nobody could ever be told
+to update.
+
+**The catalog is published by a control plane, not by CI.** A release tag can have exactly one
+writer, and two producers feeding one floating tag would clobber each other on every push — so
+`.github/workflows/seeds.yml` lints and packs `seeds/library` on a **path filter over `seeds/`**
+and uploads nothing. That check still earns its place: packing loads every bundle through
+`internal/seed`, so a seed `yggd` could not load fails in CI rather than on an operator's control
+plane, and `seeds/library` remains the *embedded* set every fresh install starts with whether or
+not it is also published. `ygg-seed lint` runs first, reporting the rules validation deliberately
+allows without failing the build over them.
 
 **`cmd/ygg-seed` is the tool the format exists for.** It scaffolds a bundle that already
 validates, loads one exactly as `yggd` does, lints it, migrates a schema 2 manifest to schema 3
@@ -1252,6 +1268,16 @@ reimplemented), not ADR-040's signing key: a seed is parsed and validated before
 anything, unlike an agent binary that executes with Docker-socket access on every node. The
 catalog is opt-in — `seed_channel` defaults to empty, and with it unset the page makes no
 outbound call at all, offering a channel picker instead that persists the choice to `yggd.yaml`.
+
+**Where it is read from is a setting**, `seeds.catalog_repo`, defaulting to the project's own
+catalog. That is the operator-added catalog path ADR-060 deferred, arriving as a repository name
+rather than a free-form URL — so the trust level is unchanged (same tag layout, same published
+`SHA256SUMS`, same parse-and-validate before anything is replaced) while a fork, a mirror, or a
+catalog an operator publishes for their own fleet becomes a value rather than a build. It is
+total: a stored value that somehow arrived empty falls back to the default rather than failing
+the page an operator would use to correct it. The in-memory index cache is keyed by repository
+*and* channel, since a channel-only key would answer with the previous repository's listing for
+up to an hour after a switch.
 
 **A bundle on disk that will not load is skipped, not fatal.** The catalog and operator layers
 are files the running binary did not ship, so closing a validation gap invalidates bundles that
@@ -1418,13 +1444,16 @@ are different states, and "give me the default back" is the first one.
 The table is key/value; what a key *means* lives in `internal/control/settings` as a registry
 of typed `Definition`s. So adding a setting is a Go declaration plus a consumer — no
 migration, no template edit, no new form field, because the page renders whatever the registry
-declares. Five ship, each with a live consumer: `log.level` (the process's own
+declares. Six ship, each with a live consumer: `log.level` (the process's own
 `slog.LevelVar`, so debug can be switched on and off without a restart), `stats.retention_days`
 (read by `telemetry.Collector` on every prune, so lowering it frees space within a minute),
-`steam.api_key`, and the pair that lets this control plane publish its own seeds —
-`seeds.publish_repo` and `seeds.publish_token` (ADR-079). That last one is the first credential
-here that writes somewhere outside this deployment, which is why its target has no default and why
-the one repository it must never name is refused rather than merely discouraged.
+`steam.api_key`, `seeds.catalog_repo` (where the Seeds page downloads from, ADR-081), and the
+pair that lets this control plane publish its own seeds — `seeds.publish_repo` and
+`seeds.publish_token` (ADR-079). That last one is the first credential here that writes somewhere
+outside this deployment, which is why its target has no default and why the one repository it must
+never name is refused rather than merely discouraged. Its catalog sibling is the mirror image: a
+read is safe, so it has a default and every control plane gets the project's catalog without being
+configured.
 
 **A secret's value cannot reach the page**, as a property of the types rather than a rule the
 template is trusted to follow: `Manager.Resolve` — what the page reads — reports only whether
