@@ -1176,6 +1176,53 @@ by default, so a seed using it falls back to the raw-YAML pane rather than being
 That pane is now a co-equal path rather than a fallback, and both routes converge on the same
 `internal/seed.Parse` and `Validate` a bundled seed loads through.
 
+**The editor is organised into five tabs — Identity, Art, Runtime, Networking, Install — beside
+a validation rail**, a visual pass over the same form above rather than a new one (ADR-079's
+amendment). Every tab's fields stay in the one `<form>` regardless of which is showing —
+`static/seedtabs.js` toggles `hidden` client-side, so a hidden tab's inputs still submit and the
+page is every field, unfiltered, with the script absent. The rail runs the same `Validate` a save
+already gates on (at most one error, since `Validate` fails fast at its first problem) plus every
+`seed.Lint` warning, and a tab's own count badge is the same two checks re-grouped by which tab
+each one's field name points at — approximate, since `Validate`'s error text is a sentence with a
+topic prefix and not a structured path, but a hint costs nothing a save does not already need.
+Runtime carries a **resolved command preview**: the primary container's command rendered against
+every declared variable, setting and port default (`seed.MergeStored` plus the same
+preview-before-allocation rendering server creation already does), so an author sees what a fresh
+server would run without creating one. The Install tab's own footer is deliberately **Validated**,
+never *Ran* — nothing here executes a step against a node, only the schema and template checks
+`Validate` already runs.
+
+Repeated rows — containers, ports, variables, settings, install steps — render as `.entry` cards
+with a header (name, type, required/secret chips) over a collapsible body, and an install step
+additionally carries a numbered spine. Markup only: every row's `name=` attributes are byte-for-byte
+what they were, which is what lets `seed_form_template_test.go`'s round-trip checks stay the proof
+that a save cannot silently drop a field, unchanged by any of this. Branding moved into a dialog —
+still the same three bundle-relative slots (icon, logo, banner) schema 3 actually has, named by
+where each appears rather than by pixel size — reached from the Art tab and associated with the
+outer form via `form="seedform"` on each control, since a `<dialog>` cannot itself be nested inside
+the form whose own close button already uses `<form method="dialog">` (two `<form>` elements cannot
+nest; the parser drops the inner one, and the close button would otherwise fall back to submitting
+the outer form instead of dismissing the dialog).
+
+**`/seeds/new` is a chooser before it is a form**: from a Steam app id (looks up the same
+`internal/control/steam` lookup the guided form's own "Fetch from Steam" button already calls, and
+seeds an `install.steps` steamcmd op from it), duplicating an existing seed (install, containers,
+variables and settings carry over; branding does not, since the bytes live under the source seed's
+own id and copying only the filenames would point at images that do not exist for the new one), a
+base-image template, pasting YAML or JSON directly, or starting blank. Every path still lands on
+the one guided form and the one save handler — the chooser only decides what `seed.Seed` that form
+starts from.
+
+**What this deliberately does not build**: a persisted draft record and an explicit Publish action
+separate from Save. The original design sketch offered a reduced version precisely for this case —
+keep saving straight through, one action, no autosave — and that is what shipped: `Save` still
+writes the operator bundle immediately, exactly as it already did. Building a draft table, an
+autosave endpoint, and a reconciliation story between an unpublished draft and the seed a server was
+actually built from is real, separable scope, and the honest reduction was taken deliberately rather
+than half-built. Live, as-you-type validation is the same call: the rail reflects the seed as it was
+last loaded or last submitted, not a live re-check on every keystroke, which is consistent with every
+other server-rendered form in this codebase and adds no new failure mode to reason about.
+
 ### Seeds can be published, not only downloaded
 
 The catalog was one-way until ADR-079: `yggd` read `seeds.json` from a floating channel tag and
