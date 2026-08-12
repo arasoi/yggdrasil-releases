@@ -1102,12 +1102,19 @@ through a whole-file `server.properties` template. Converting Paper is its own s
   `base-linux`, which is what supplies the pinned .NET 10 runtime the game needs (ADR-084). It
   declares a same-number TCP/UDP port pair via `offset_from`/`offset: 0` (ADR-048's mechanism
   used for identity rather than a real shift, and the case ADR-083's atomic port-group
-  allocation exists for) and a `ready: {mode: port}` rule rather than a log pattern, since — like
-  the caveat this entry now closes for the seed's own `.NET` runtime bug — nobody has run a real
-  server against this seed here to confirm a log line to match against. Promoted from a staged,
-  non-embedded seed into the bundled set once its one confirmed runtime bug (a corrupted,
-  unverified `.NET` download; see ADR-084) was fixed, not once the seed was proven end-to-end —
-  that proof, like ARK's and Dune Awakening's, is still open.
+  allocation exists for) and a `ready: {mode: port}` rule rather than a log pattern. **It is now
+  proven end to end** — a real server installed, provisioned, started and accepted a real game
+  client, through `yggd` and `ygg-agent` on a real node — which is the criterion ARK's and Dune
+  Awakening's entries still leave open, and which this entry itself described as open when the
+  seed was promoted on the strength of one fixed runtime bug alone (ADR-084). Reaching it took a
+  second fix that promotion had not caught: the seed's `serverconfig.json` template wrote
+  `DefaultRoleCode: "suplayer"` with no `Roles` array behind it, and the game killed itself at
+  startup rather than defaulting the list — because Vintage Story only populates its default
+  roles on a first run that finds *no* config file, and `manage: always` guarantees it always
+  finds one. The template now writes the game's own default roles explicitly. `ready` stays on
+  `mode: port` regardless: the game does print a usable ready line, but nobody has captured one
+  from a real run here, and this project does not put an unverified pattern in a field where it
+  would look active (ADR-067's rule, and the reason two bundled seeds keep theirs as comments).
 
 One real-world wrinkle worth recording: PaperMC's download API changed shape between when the
 sketch above was written and phase 4's implementation — the current API (`fill.papermc.io/v3`)
