@@ -121,7 +121,11 @@ allocated — always the next free port in the node's range, never the seed's de
 since a node's range is the operator's statement of which ports work on that host (ADR-061) —
 or derived from another port on the same container by a fixed offset, which Valheim's Steam
 query port, hardcoded to `game_port + 1` with no way to configure it separately, is what
-exists for (ADR-048).
+exists for (ADR-048). A base port and its offset siblings — including a same-number sibling on
+a different protocol, how a seed asks for one number on both TCP and UDP (Vintage Story) —
+allocate as one atomic group (`store.AllocatePortGroup`, ADR-083): a base candidate is accepted
+only once every sibling's derived number is confirmed free too, so a collision moves the whole
+group to the next candidate rather than stranding one member with the other already claimed.
 
 The `ip` in that tuple is the **bind** address — always `0.0.0.0` — and part of the row's
 unique key. It is not a connect address, and was shown as one until ADR-065: a server's page
