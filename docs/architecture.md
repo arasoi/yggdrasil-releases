@@ -892,9 +892,10 @@ things deliberately do **not** travel, for the same reason: a step's `if` is eva
 control plane and a false step is simply not sent, and a symbolic base image is resolved by the
 control plane — so the agent still needs no access to a seed's variables or to the release
 channel (ADR-012). The old `method`/`url`/`archive`/`filename`/`app_id` fields are still written
-alongside the steps for one release, so a protocol 1 agent installs exactly as it did; the
-negotiated protocol is 2 (ADR-014's N-1 window, which until now had no real history to mean
-anything against). `internal/configfile` is the shared key-patching implementation behind both
+alongside the steps for one release, so a protocol 1 agent installs exactly as it did; that work
+took the negotiated protocol to 2 (ADR-014's N-1 window, which until then had no real history to
+mean anything against), and ADR-082's log viewer has since taken it to 3 the same additive way.
+`internal/configfile` is the shared key-patching implementation behind both
 the `patch` step and a config file managed `patch`, so a key path means the same thing at
 install time and at provision time.
 
@@ -1384,9 +1385,9 @@ validates, loads one exactly as `yggd` does, lints it, migrates a schema 2 manif
 in place (on a `yaml.Node` tree, so comments and key order survive), packs a catalog, and imports
 a Pelican or Pterodactyl egg best-effort — reporting everything it could not carry rather than
 dropping it, since an egg's install is a bash script and a seed's is a fixed vocabulary of typed
-operations. `ygg-seedpack` is a thin alias for its `pack` subcommand. Nothing in it reimplements
-the format: a seed it accepts is a seed `yggd` accepts, which is the property that makes it worth
-having at all.
+operations. Nothing in it reimplements the format: a seed it accepts is a seed `yggd` accepts,
+which is the property that makes it worth having at all. `ygg-seedpack` was a thin alias for its
+`pack` subcommand and is gone — see ADR-060's 2026-08-12 amendment.
 
 Seeds therefore load in **three layers** (`seed.Merge`, in order):
 
@@ -1785,9 +1786,11 @@ and register a binary, click Update on a connected node, and watch a real agent 
 download, verify, install, drain, exit, and — restarted the way systemd would — reconnect
 running the new version with the job resolving automatically. See "Agent updates are pushed
 from the UI" above for the full sequence and ADR-040/ADR-041 for the design. The exit criterion's
-N-1 half **has since gained the real history it was waiting for**: the protocol is 2 with
+N-1 half **has since gained the real history it was waiting for**: the protocol is 3 with
 `MinProtocol` 1, so "a current control plane talking to a protocol 1 agent" is a live
-configuration rather than the hypothesis this entry used to describe. It stays open on a narrower
+configuration rather than the hypothesis this entry used to describe — and the supported window
+is now two steps wide rather than one, since ADR-077 took it to 2 and ADR-082 to 3 while the
+floor stayed put. It stays open on a narrower
 point than before — the pairing is tested against constructed version ranges rather than against
 an agent binary actually built before the bump, which is the one thing a released `qa` or `main`
 artifact from before ADR-077 could now supply.
