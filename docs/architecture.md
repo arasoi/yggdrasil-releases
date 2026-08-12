@@ -637,6 +637,35 @@ nothing else: derived from what the game printed, discarded when the server stop
 reason its facts are, and depended on by nothing. The count is shown only for a seed that declares
 such a rule, since "0 players" on a server nobody is counting is a confident wrong answer.
 
+**Logs** (ADR-082) — a live view of `yggd`'s and `ygg-agent`'s own runtime output, not any
+game's. Server output already has a live-viewing mechanism above; the control plane and the
+agent's own process logs had none until this, so an operator debugging a node or the control
+plane had only whatever they happened to be tailing at the shell. Both binaries tee their
+existing `slog` handler into a bounded, line-count-capped `logging.Ring` (2000 records, capped
+by count rather than bytes — the unit here is a whole structured record, and a byte cap would
+let one attribute-heavy record, a stack trace, evict most of the backlog). Nothing about
+existing stdout output changes: the ring is a second destination, not a replacement.
+
+A node's ring reaches the browser the same way console output does — `stream_id`-correlated
+`LogWatch`/`LogUnwatch`/`LogBatch`/`LogClosed` messages on the persistent connection, a session
+per node in a new `LogHub` structurally mirroring `ConsoleHub`, ending the same way a stale
+console session does when the node's stream tears down (ADR-072). It differs from console in
+two ways that follow directly from the content being structured rather than raw bytes: lines
+are batched on a short coalescing window rather than sent one message per line, and the control
+plane's own logs never cross the wire at all — `LogHub` serves them directly from a local
+session fed straight off `yggd`'s own ring, sharing the same viewer/backlog/fan-out machinery
+rather than a second hub type. Neither leg persists anything: a restart loses the ring's
+history, the same way console's own scrollback is lost on restart (ADR-012).
+
+`/logs` shows the control plane's own log stream; a node's page carries the same view in a
+Logs card, kept outside that page's live region for the reason `stats-panel`/`graphs-panel`
+already are (ADR-058) — a region swap on every unrelated node change would tear down and
+reconnect an open websocket for no reason. Both render through `static/logs.js`, a plain
+scrolling list rather than xterm.js: these are structured records with a level and a
+timestamp, not ANSI terminal bytes, so a terminal emulator is the wrong tool. Server console
+output is unaffected by any of this — `internal/agent/console`, `ConsoleHub`, and `console.js`
+are untouched.
+
 **Files** (phase 3) — each server gets a sandboxed directory on its node, rooted under the
 agent's `servers_dir` and created on first use. `internal/agent/files.Root` resolves every
 path relative to that root and rejects anything that would escape it — a lexical `..` is
