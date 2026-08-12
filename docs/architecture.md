@@ -1096,6 +1096,18 @@ through a whole-file `server.properties` template. Converting Paper is its own s
   took it for; the real signal is the absence of `Joined PlayFab Party network` and a
   30-second `create and join network` retry loop, which is what a `libparty.so` missing
   `libpulse-mainloop-glib0` produces.
+- **Vintage Story** (`seeds/library/vintage-story/seed.yaml`) is a non-shared plain-download
+  install (one `download` plus `extract` step, no container needed) for a .NET application with
+  no official Linux image — its primary container runs on `images/base-dotnet` rather than
+  `base-linux`, which is what supplies the pinned .NET 10 runtime the game needs (ADR-084). It
+  declares a same-number TCP/UDP port pair via `offset_from`/`offset: 0` (ADR-048's mechanism
+  used for identity rather than a real shift, and the case ADR-083's atomic port-group
+  allocation exists for) and a `ready: {mode: port}` rule rather than a log pattern, since — like
+  the caveat this entry now closes for the seed's own `.NET` runtime bug — nobody has run a real
+  server against this seed here to confirm a log line to match against. Promoted from a staged,
+  non-embedded seed into the bundled set once its one confirmed runtime bug (a corrupted,
+  unverified `.NET` download; see ADR-084) was fixed, not once the seed was proven end-to-end —
+  that proof, like ARK's and Dune Awakening's, is still open.
 
 One real-world wrinkle worth recording: PaperMC's download API changed shape between when the
 sketch above was written and phase 4's implementation — the current API (`fill.papermc.io/v3`)
