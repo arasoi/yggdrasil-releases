@@ -720,6 +720,20 @@ survives, since `Destroy` removes containers and the pod network but never a hos
 and every writable path is a bind mount from the server's own directory. A port field left
 blank takes the next free port in the node's range; a derived port is shown but not editable.
 
+**A seed's controls are tabbed once there are enough of them, and the page is searchable**
+(ADR-085). A block of four or more groups renders as a vertical tab rail beside one panel per
+group — Vintage Story's 136 controls in 18 groups are 3.2 screens of headings as a stack and 1.3
+screens as tabs — and the seed's `collapsed` declaration decides which tab opens rather than
+whether a fieldset starts shut. Above them sits **one** filter for the whole page, matching a
+control's name, label, description or group: the variable/setting split is the seed author's and
+not the operator's, who knows the name of what they are looking for and not which block declared
+it. Every panel stays in the form whichever tab is showing, since a setting that failed to submit
+would read as *absent* — a third state meaning "leave the game's own config alone" — rather than
+as unchanged. A field a `show_if` rule hides is never surfaced by a match, and a control the
+browser refuses to submit has its tab and the filter cleared before the browser reports it, since
+constraint validation runs on hidden controls and would otherwise block Save with nothing on
+screen to point at.
+
 **Moving a server to another node** is its own action on that page, and a Job rather than an
 edit (ADR-063). The source node archives the server's writable state and uploads it; the
 control plane stages it; the target downloads, restores, and the server is repointed,
