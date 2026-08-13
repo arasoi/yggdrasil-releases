@@ -1043,8 +1043,8 @@ Placement scheduling is deferred until a mixed fleet exists (ADR-016).
 The bundled seeds deliberately sit at opposite ends of ADR-018's install model, and all run
 end-to-end from the UI with no game-specific Go code:
 
-Both Minecraft seeds expose their full documented configuration surface (ADR-076) — 44 controls
-for Paper, 26 for Bedrock — grouped, typed, and with settings that depend on another
+Three seeds expose their full documented configuration surface (ADR-076) — 44 controls for
+Paper, 26 for Bedrock, 136 for Vintage Story — grouped, typed, and with settings that depend on another
 (`rcon.password`, a resource pack's checksum) hidden until the setting they depend on is on.
 That dependency is declared by the seed as `show_if`, not encoded in the UI, so a new game
 stays a data change. A hidden control still submits, so visibility never becomes something the
@@ -1116,6 +1116,20 @@ through a whole-file `server.properties` template. Converting Paper is its own s
   `mode: port` regardless: the game does print a usable ready line, but nobody has captured one
   from a real run here, and this project does not put an unverified pattern in a field where it
   would look active (ADR-067's rule, and the reason two bundled seeds keep theirs as comments).
+  Its configuration surface is now the whole of what the game's two wiki pages document: **136
+  controls in 18 groups**, the largest of any bundled seed. The grouping follows each page rather
+  than one scheme imposed over both — every `World: ...` group is a heading from the World
+  Configuration page verbatim, while the server-side groups are the seed's own, because the
+  Server Config page has no topical sections at all (its only headings are `serverconfig.json`
+  and `servermagicnumbers.json`, over one flat annotated sample). They are `variables` rather
+  than `settings` for the same reason Paper's 44 are: a setting's `file` destination is only
+  valid against a file managed `patch`, and this codebase's JSON patcher writes every value as a
+  string, where `MaxClients` and the `AllowXxx` flags must stay real JSON numbers and booleans.
+  The wiki's "Configurations not in the customize world screen" publish no defaults, so each of
+  those is blank and its key is omitted entirely until set — writing a guessed default would
+  silently override whatever the game itself uses. `servermagicnumbers.json` is deliberately not
+  covered: a separate file of engine internals (thread counts, chunk queue sizes, desync
+  tolerances) whose 25 keys nobody here has tested.
 
 One real-world wrinkle worth recording: PaperMC's download API changed shape between when the
 sketch above was written and phase 4's implementation — the current API (`fill.papermc.io/v3`)
