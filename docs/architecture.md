@@ -1614,6 +1614,49 @@ envelope (each bucket keeps its maximum, never its mean, so a spike survives), a
 series carry palette-independent colours of their own for the same reason semantic state colour
 does: "in" and "out" have to stay tellable apart whichever accent is active.
 
+## The UI is translatable
+
+Every operator-facing string goes through `internal/i18n` (ADR-086), keyed by its own **English
+source text** rather than an invented identifier. A template reads as English prose
+(`{{T `Back up now`}}`), and a message with no translation falls back to its key — which is
+already correct English. So a partially translated language is usable, and there is no state in
+which a page shows a raw identifier or a blank.
+
+Templates are parsed **once per shipped language**, because a `FuncMap` is fixed at parse time
+and `T` must close over the language it renders in; `render()` then selects a pre-parsed set and
+does no per-request template work. Language resolves as the operator's stored preference
+(`ui.language`, a runtime setting), then the browser's `Accept-Language`, then English — read per
+request, so a change takes effect on the next page load with nothing to invalidate. `<html lang>`
+declares whichever language actually rendered.
+
+**Plural forms come from CLDR via `x/text`, not from the catalogue**, so a language distinguishing
+one/few/many selects correctly the moment its file is added, with no code change. That is what
+makes adding a language a data change: drop a locale file beside `en.json` and it appears in the
+setting, the matcher and every page. Formatting follows the locale too — German writes
+`64,0 MiB` — while unit symbols and seed-schema literals (`patch`, `tcp`, `amd64`) deliberately
+stay English, since translating either would make it wrong.
+
+The English catalogue is **generated from the source by the same test that checks it**, the
+discipline `internal/seed/schema.json` already uses. Three guards close the silent failures: a
+used key missing from the catalogue, an orphaned entry (what an edited English string leaves
+behind), and a coverage ceiling that may only come down.
+
+**English is the only catalogue that ships.** The machinery is complete and exercised; what is
+absent is translated content, which nobody here can verify — and a machine translation of ~790
+strings would put unreviewable text on destructive actions. Because that leaves every
+language-selection path unexercised by construction, a test injects a second catalogue and drives
+a real request through `render()`, asserting it renders in that language, declares it, and falls
+back to English for a key it lacks.
+
+Two limits are carried forward rather than read as done. About 150 template fragments are
+sentences split by inline markup, where each fragment is half a sentence that cannot be translated
+alone; fixing them means restructuring the markup per site. And **seed content is specified but not
+built** — a seed's own labels and descriptions are the majority of what an operator reads on a
+settings page, and ADR-086 records the design: per-language files inside the bundle
+(`<seed-id>/locales/<lang>.yaml`), keyed by the declared control name rather than by source text
+(a seed author may not write in English), with a stale entry as a lint warning rather than a load
+error and missing entries falling back to the seed's own text.
+
 ## Operator settings
 
 Configuration splits on one question: **is it needed before there is a database to read?**
