@@ -467,6 +467,40 @@ your role updates the binary and restarts the service without touching your
 existing config (see "Quick install" above). The manual paths below are the
 same thing done by hand.
 
+### Updating to 0.44.0 from an earlier release: install your seeds first
+
+Seeds are no longer built into `yggd` (ADR-087). They are downloaded from the
+catalog, and 0.44.0 is the release where a control plane stops having any of
+its own.
+
+**Your servers keep running.** Agents supervise them independently of the
+control plane, so nothing goes down. But a seed-driven server rebuilds its pod
+specification from its seed on *every start and stop*, so until the matching
+seed is installed those actions fail with "seed ... is no longer available",
+and so does anything that rebuilds a pod: the Settings page, Rebuild, an
+install update, removing a cluster member, and moving a server.
+
+Nothing is lost, and recovering takes one click per seed:
+
+1. Update `yggd` as below.
+2. Open **Seeds**. The catalog is on by default and points at this project's
+   own, so the list is already populated.
+3. Install each seed your servers were built from — the ids are unchanged, so
+   `minecraft-java-paper` is still `minecraft-java-paper`.
+
+Lifecycle control returns as soon as each seed is installed; no restart is
+needed. Doing this *before* you update avoids the window entirely, since an
+installed seed sits in the data directory rather than in the binary and
+survives the upgrade.
+
+Two things worth knowing while you are there. The catalog's seeds are newer
+than the ones 0.43 and earlier bundled, so the first start after installing
+rebuilds that server's pod from a newer definition -- seed migrations carry
+your stored settings across, which is what they exist for, but the change
+happens on that start rather than when you choose it. And a control plane with
+no outbound network gets no seeds this way at all: place the bundles in
+`seeds_dir` by hand instead.
+
 ### `yggd`
 
 Set `update_channel` (config key or `YGG_UPDATE_CHANNEL`) to `develop`,
