@@ -79,9 +79,12 @@ re-enrolled automatically, since re-enrolling mints a new node identity and
 orphans that node's existing servers (ADR-052) — pass `--force-enroll` if you
 genuinely mean to replace it. A fresh control-plane install also provisions
 and configures a seeds directory (`seeds_dir`, under `--config-dir`)
-automatically, so the seed authoring UI works with no manual edit; bundled
-seeds (Minecraft, ARK, Valheim, ...) need no configuration at all, since
-they're embedded in the `yggd` binary itself (ADR-049).
+automatically, so the seed authoring UI works with no manual edit. Game
+definitions themselves are **not** in the binary (ADR-087): `yggd` reads them
+from the published catalog, which `seed_channel` tracks and which defaults to
+`main`, so the Seeds page lists what is available with no configuration —
+installing any of it is one click per seed. A host with no outbound access
+gets no seeds this way and needs bundles placed in `seeds_dir` by hand.
 
 To undo an install, `hack/uninstall.sh --role control-plane|node|both`
 removes the unit, binary, config, data directory, and system user — see
@@ -441,8 +444,9 @@ unless `-y`/`--yes` is given; `--keep-data` leaves the data directory alone
 and `--keep-user` leaves the system user in place. `--help` lists every flag.
 
 Your own seeds under `/etc/yggdrasil/seeds` are treated as data: removed
-with a control plane unless `--keep-data` is given. Bundled seeds ship
-inside the binary and are not stored there.
+with a control plane unless `--keep-data` is given. Seeds installed from the
+catalog live under the data directory and go with it for the same reason;
+reinstalling them is a click each on the Seeds page.
 
 On a combined host running both roles, uninstalling one leaves the other's
 data, binary, config, unit, and the shared system user untouched. The two
