@@ -174,6 +174,35 @@ path is the general fallback that works for games offering nothing.
 **Installs are never backed up.** They are reproducible from the seed, and excluding
 them keeps backups proportional to actual game state rather than to disk footprint (ADR-023).
 
+**Every directory above has an owner that removes it** (ADR-088). Until then none of them did:
+`Runtime.Destroy` removes containers and the pod network and never a host directory, there was no
+route to delete an install at all, and nothing anywhere removed a backup archive — so a fleet with
+a scheduled backup (ADR-045) accumulated them for as long as it had been running.
+
+One agent-side command, `ReclaimData`, frees a server directory, an install directory or a backup
+archive. It is shaped exactly like `DeleteClusterVolume` (ADR-066) and for the same reason: the
+file sandbox is rooted at one *server's* directory (ADR-033) and none of these sit inside such a
+root, so it gets its own narrow message whose id is parsed as an id of the matching kind before it
+can name a path. Deleting a server frees its directory and its archives, a move frees the source
+node's copy, deleting an install frees its files once nothing references it, and the scheduler
+prunes archives past `backups.retention_days`.
+
+**Reclamation is best-effort and nothing depends on it.** A pre-protocol-4 agent ignores the
+command, so every caller logs a failure and carries on — refusing to delete a server because its
+disk could not be freed would leave an operator with a row they cannot remove. The cost is an
+orphaned directory an operator can still remove by hand.
+
+Ordering differs by path, deliberately. A server's archives are found by listing rows its own
+deletion then cascades away, so those are reclaimed *before* the row. An install's id and node are
+already known, and its row delete is what refuses while a server still references it — so there the
+row goes first, because reclaiming before a refusal wipes an install that is still mounted into
+running containers.
+
+An agent also sweeps runtime leftovers at startup, after adoption: an exited one-shot installer
+(ADR-057) and a pod network with nothing attached. Deliberately nothing else — it never removes a
+container merely because the control plane did not mention it, since ADR-031's reasoning about
+acting on incomplete information applies with full force to deletion.
+
 The block above is a node's layout, under the *agent's* `data_dir`. The *control plane's* own
 `data_dir` is a separate tree:
 
@@ -743,7 +772,9 @@ so the target resolves its own and the source's refcount drops. Ports are reallo
 target's range, so players need the new numbers. A clustered server cannot move on its own,
 since a cluster's volume is node-local (ADR-020). The archive travels over two RPCs of its
 own rather than the persistent stream, exactly as an agent binary does (ADR-041); backups
-themselves remain node-local (ADR-042).
+themselves remain node-local (ADR-042), which is why a move reclaims the source's *directory*
+(ADR-088) and deliberately not its archives — those did not travel, and removing them would
+destroy the server's backup history as a side effect of moving it.
 
 **Every node has a page** at `/nodes/{id}` (ADR-065), for the same reason every server does:
 a node was a table row, so the capacity its agent reports at every handshake — cores, memory,
@@ -1052,157 +1083,60 @@ pods. Between them they cover all three axes.
 invalid placement is rejected with a clear error rather than an opaque exec-format crash-loop.
 Placement scheduling is deferred until a mixed fleet exists (ADR-016).
 
-### What the bundled seeds cover
+### What the seed catalog covers
 
-The bundled seeds deliberately sit at opposite ends of ADR-018's install model, and all run
-end-to-end from the UI with no game-specific Go code:
+The seeds themselves live in `arasoi/yggdrasil-seeds` (ADR-081, ADR-087), which is where they are
+authored, versioned and published, and where what each one covers is documented next to it. This
+document describes the *format* and the machinery; the catalog describes the games.
 
-Every bundled seed now exposes its full documented configuration surface — 171 controls for
-ARK, 136 for Vintage Story, 58 for Paper, 38 for Bedrock, 20 for Valheim — grouped, typed, and
-rendered as a tab rail with a page-level filter (ADR-085), with settings that depend on another
-(`rcon.password`, a resource pack's checksum) hidden until the setting they depend on is on.
-That dependency is declared by the seed as `show_if`, not encoded in the UI, so a new game
-stays a data change. A hidden control still submits, so visibility never becomes something the
-control plane has to reason about.
+That repository publishes five seeds at the time of writing — ARK Survival Ascended, Minecraft
+Java (Paper), Minecraft Bedrock, Valheim and Vintage Story — which between them exercise both ends
+of ADR-018's install model: a shared SteamCMD install mounted read-only with per-server writable
+overlays and cluster support at one end, and an image that installs the game itself with no
+install block at all at the other. Phase 5's and phase 6's exit criteria are stated against two of
+them and are tracked in the phase table below, not here.
 
-Which of the two blocks those controls live in still differs between them, and that is a real
-difference rather than an inconsistency: Bedrock's are 25 `settings` with `env` destinations plus
-one variable (the build its image downloads), while Paper's 44 are all still `variables` rendered
-through a whole-file `server.properties` template. Converting Paper is its own seed release —
-44 keys is where `manage: patch`'s read-back-from-node failure mode actually lives (ADR-077).
+**What this repository keeps is a fixture corpus**, `internal/seed/seedtest`, six bundles written
+for coverage rather than for play. It exists because the embedded set was never only a shipping
+mechanism: eighteen test files swept it, and `seedform`'s round-trip sweep in particular is the
+mechanical guard against the drop-on-save bug this codebase has recorded four times. Deleting the
+seeds without replacing the corpus would have deleted that guard.
 
-- **Paper** has a non-shared `install` (one `download` step) and a `config.files` block that
-  renders `eula.txt` (`manage: once`, so an operator's edit survives) and `server.properties`
-  from real template files in its bundle directory (`ConfigFile.SourcePath`, ADR-049) — the
-  licence-gate row in the table above.
-  `internal/agent/install` fetches a single file or an archive (`zip`/`targz`) and unpacks it
-  with the same zip-slip protection `internal/agent/files` applies to operator-supplied paths
-  (ADR-033), applied here to archive-supplied ones. Rendered config files are pushed with the
-  *existing* phase 3 `FileWrite` RPC rather than a new mechanism — writing a file into a
-  server's own directory is exactly what that RPC already does.
-- **Bedrock** has no `install` block at all: its image downloads the official server itself at
-  container start, the case ADR-018 already calls out as needing no separate install.
-- **ARK's configuration surface is 167 settings across 14 groups, and every one is
-  `optional`.** They patch `GameUserSettings.ini` and `Game.ini` (`manage: patch`, both
-  `importable`), where before this seed wrote no config file at all. Optional is what makes
-  that safe to ship: an absent optional setting leaves its key unwritten (ADR-077's
-  tri-state), so an existing server's hand-edited ini is not patched over by an unrelated
-  rebuild, and a fresh server still gets ARK's own defaults. The first save through the
-  settings form makes them present — an explicit act, which is the distinction being kept.
-  **None of it is verified against a running server**: the keys come from Wildcard's
-  documentation, phase 5's exit criterion is still open, and Unreal ignores an unknown ini
-  key silently, so a wrong spelling shows up as a setting that saves and does nothing.
-- **ARK Survival Ascended** (`seeds/library/ark-survival-ascended/seed.yaml`) exercises
-  ADR-018 and ADR-020: a shared SteamCMD install mounted read-only at `/game`, per-server
-  writable paths for saves and config, and a `/cluster` mount with the cluster id and
-  directory override passed to the primary container. It is the bundled example for the
-  one-install-many-maps workflow phase 5 is building toward. Its primary container runs on
-  `images/base-steamcmd-proton` and invokes the game through `ygg-proton`, the wrapper inside
-  that image that owns every Proton invocation detail so the seed's command stays one readable
-  line, plus a fourth writable path (`compatdata`) for the Wine prefix that runs under — see
-  phase 5's status below for what is and is not yet proven about that path.
-- **Valheim** (`seeds/library/valheim/seed.yaml`) is the SteamCMD install path proven against a real
-  game end-to-end, not a synthetic stand-in: it has an official Linux dedicated server binary
-  (unlike ARK ASA), so no Proton wrapper is needed, and a real run installed, provisioned,
-  started, and matched its readiness pattern against genuine stdout — declared as
-  `ready: {mode: log}` since ADR-077, where it had been a `logs.ready` substring nothing read.
-  It is also the first seed
-  to use an offset-derived port (`query`, `game_port + 1`, ADR-048) — Valheim's Steam query
-  port hardcoded with no independent flag, which is what that ADR's schema addition exists for.
-  It is now also the only seed declaring a `logs.values` rule, for the six-digit join code the
-  game prints and nothing else knows (ADR-067), alongside a `crossplay` variable defaulting
-  to on — `crossplay_flag` until ADR-077 renamed it behind a `renamed_from`, which is what kept
-  every operator's stored choice rather than turning crossplay back on wherever it was off.
-  Without `-crossplay` the game never prints a code at all, so the rule and the flag
-  travel together. **That rule is now verified against a real crossplay server** (ADR-073),
-  closing the caveat this entry previously carried: a real run reached
-  `Session "..." registered with join code 105503` and the pattern extracted it. The same run
-  settled what the empty `has join code ,` line means — nothing. A healthy server logs it
-  seconds before PlayFab returns the code, so it is not the crossplay-is-broken signal ADR-070
-  took it for; the real signal is the absence of `Joined PlayFab Party network` and a
-  30-second `create and join network` retry loop, which is what a `libparty.so` missing
-  `libpulse-mainloop-glib0` produces.
-- **Vintage Story** (`seeds/library/vintage-story/seed.yaml`) is a non-shared plain-download
-  install (one `download` plus `extract` step, no container needed) for a .NET application with
-  no official Linux image — its primary container runs on `images/base-dotnet` rather than
-  `base-linux`, which is what supplies the pinned .NET 10 runtime the game needs (ADR-084). It
-  declares a same-number TCP/UDP port pair via `offset_from`/`offset: 0` (ADR-048's mechanism
-  used for identity rather than a real shift, and the case ADR-083's atomic port-group
-  allocation exists for) and a `ready: {mode: port}` rule rather than a log pattern. **It is now
-  proven end to end** — a real server installed, provisioned, started and accepted a real game
-  client, through `yggd` and `ygg-agent` on a real node — which is the criterion ARK's and Dune
-  Awakening's entries still leave open, and which this entry itself described as open when the
-  seed was promoted on the strength of one fixed runtime bug alone (ADR-084). Reaching it took a
-  second fix that promotion had not caught: the seed's `serverconfig.json` template wrote
-  `DefaultRoleCode: "suplayer"` with no `Roles` array behind it, and the game killed itself at
-  startup rather than defaulting the list — because Vintage Story only populates its default
-  roles on a first run that finds *no* config file, and `manage: always` guarantees it always
-  finds one. The template now writes the game's own default roles explicitly. `ready` stays on
-  `mode: port` regardless: the game does print a usable ready line, but nobody has captured one
-  from a real run here, and this project does not put an unverified pattern in a field where it
-  would look active (ADR-067's rule, and the reason two bundled seeds keep theirs as comments).
-  Its configuration surface is now the whole of what the game's two wiki pages document: **136
-  controls in 18 groups**, the largest of any bundled seed. The grouping follows each page rather
-  than one scheme imposed over both — every `World: ...` group is a heading from the World
-  Configuration page verbatim, while the server-side groups are the seed's own, because the
-  Server Config page has no topical sections at all (its only headings are `serverconfig.json`
-  and `servermagicnumbers.json`, over one flat annotated sample). They are `variables` rather
-  than `settings` for the same reason Paper's 44 are: a setting's `file` destination is only
-  valid against a file managed `patch`, and this codebase's JSON patcher writes every value as a
-  string, where `MaxClients` and the `AllowXxx` flags must stay real JSON numbers and booleans.
-  The wiki's "Configurations not in the customize world screen" publish no defaults, so each of
-  those is blank and its key is omitted entirely until set — writing a guessed default would
-  silently override whatever the game itself uses. `servermagicnumbers.json` is deliberately not
-  covered: a separate file of engine internals (thread counts, chunk queue sizes, desync
-  tolerances) whose 25 keys nobody here has tested.
+The corpus is deliberately not a copy of what shipped — a vendored copy nobody updates is the
+same second-writer drift ADR-087 removed — so each fixture names the corner it owns:
 
-One real-world wrinkle worth recording: PaperMC's download API changed shape between when the
-sketch above was written and phase 4's implementation — the current API (`fill.papermc.io/v3`)
-hands back a content-addressed URL per build rather than one a version and build number alone
-can template. The Paper seed's `install.url` is therefore itself a single editable variable
-(the resolved download URL) rather than a templated `{version}/{build}` path — bumping the
-Minecraft version an operator gets is editing that one field, still a data change rather than
-a Go one (ADR-007), just not the exact shape originally sketched.
+| Fixture | Owns |
+|---|---|
+| `shared-install-cluster` | a shared refcounted install, read-only mount with writable overlays, cluster args, a steamcmd step, ini settings behind `manage: patch` and `importable` |
+| `derived-port-logs` | an offset-derived port, `logs.values` and `logs.events`, `ready: {mode: log}`, `renamed_from` and a rename migration |
+| `env-settings` | settings with `env` destinations, the absent/empty/set tri-state, `promote` migrations, and no install block |
+| `file-settings` | config files managed `once` and `always`, `source_path` templates, `show_if`, and the RCON-needs-a-password template guard |
+| `many-groups` | enough groups to cross `varSection`'s tab threshold, every control type, and a JSON config where numbers and booleans must render unquoted |
+| `addons-branding` | an optional addon container, branding files with real image bytes, a `connect` block, a multi-container pod with health gates, volumes and backup hooks |
 
-A seed's containers may name their primary container's role anything readable ("game", as
-above) — but on the wire it is always normalised to the same `primary` role every other path
-already uses (docs/conventions.md's container conventions table), since the console page and
-allocation lookups have no way to discover a differently-named one.
-
-Install jobs (ADR-021) stream progress from agent to control plane over dedicated
-`InstallStart`/`InstallProgress` messages, correlated by `job_id` rather than the request's
-`command_id` — installing can take anywhere from seconds to minutes, and nothing about it
-should block the stream the way a lifecycle command's reply does. Provisioning that has to
-wait on one is finished when the install job reports success, by the same handler that records
-it (`hub.InstallReconciler`, ADR-059), and again on page load as a safety net (ADR-035) — still
-no background worker for it either way. A node's storage paths, needed to build a seed-driven
-pod's bind mounts, are reported at handshake rather than assumed by convention (ADR-034).
-
-The page-load path is not redundant: it is what covers a server whose *node* was offline at the
-moment its install finished, so the event-driven path had nowhere to dispatch to.
+A test that needs something none of these declares should add a fixture rather than reach for a
+published seed: a fixture states the property it is there for, where a shipped game states only
+what that game happens to need.
 
 ### Seed bundles, authoring UI, and Steam integration
 
-ADR-049's directory-per-seed layout is built. A seed is now `seeds/library/<id>/` (bundled) or
-`<seeds-dir>/<id>/` (operator), each holding a `seed.yaml` manifest plus, optionally, real
-config-file templates under `configs/` — Paper's `eula.txt`/`server.properties` moved out of
-inline YAML string blocks into `configs/eula.txt.tmpl`/`configs/server.properties.tmpl`,
-referenced from the manifest by `ConfigFile.SourcePath` rather than `ConfigFile.Template`.
-`internal/seed.LoadDir`/`LoadFS` resolve `SourcePath` against the bundle directory into
-`Template` before validation runs, so `validateTemplates`'s load-time dry-render needed no
-changes — exactly the seam ADR-049 planned. The schema bumped to 2 accordingly; a schema-1 seed
-(single flat YAML file, inline templates only) is no longer accepted. `seeds/bundled.go`'s
-`go:embed` targets a `library/` subtree rather than seeds/'s own directory, since embedding
-`seeds/*` directly would have swept `bundled.go` itself in as if it were a seed — the exact
-problem ADR-049 flagged as unresolved when it was written.
+ADR-049's directory-per-seed layout is built. A seed is a directory — `<data_dir>/seeds/<id>/`
+(catalog) or `<seeds-dir>/<id>/` (operator) — each holding a `seed.yaml` manifest plus,
+optionally, real config-file templates under `configs/`, referenced from the manifest by
+`ConfigFile.SourcePath` rather than `ConfigFile.Template`. `internal/seed.LoadDir`/`LoadFS`
+resolve `SourcePath` against the bundle directory into `Template` before validation runs, so
+`validateTemplates`'s load-time dry-render needed no changes — exactly the seam ADR-049 planned.
+The schema bumped to 2 accordingly; a schema-1 seed (single flat YAML file, inline templates
+only) is no longer accepted.
 
 The seed authoring UI covers the **whole** of schema 3 (ADR-079). `/seeds` lists every seed
-(bundled, catalog and operator, badged by source), `/seeds/new` and `/seeds/{id}/edit` write
+(catalog and operator, badged by source), `/seeds/new` and `/seeds/{id}/edit` write
 straight into the operator's `--seeds-dir` as a real bundle directory, and saving triggers an
 in-process reload (`internal/control/web`'s `reloadSeeds`, guarded by a mutex around `s.seeds`) —
 a seed created or edited through the UI shows up in "New server from seed" immediately, no
-restart. Editing a *bundled* seed materialises an operator override with the same id on first
-save, resolving the open question ADR-050 originally left unanswered.
+restart. Editing a *catalog* seed materialises an operator copy with the same id on first save,
+resolving the open question ADR-050 originally left unanswered — and taking that seed out of the
+catalog's reach, since an update replaces a bundle wholesale and the operator layer sits above it.
 
 The form has real fields for every block: identity and branding, the install's ordered steps (all
 nine executable ops), writable paths and the file denylist, cluster support, containers with their
@@ -1215,8 +1149,8 @@ refuse a seed that exceeded one. Three of the four recorded drop-on-save bugs we
 failing.
 
 `internal/control/web/seedform` owns the form's shape: `Decode` turns `url.Values` into a
-`seed.Seed`, and `Encode` is its inverse, existing so that **every bundled seed round-trips
-unchanged** and does so idempotently. That is the mechanical answer to a failure this codebase has
+`seed.Seed`, and `Encode` is its inverse, existing so that **every seed in the fixture corpus
+round-trips unchanged** and does so idempotently. That is the mechanical answer to a failure this codebase has
 recorded four times — a seventh variable, a `Required` flag, an offset relationship, a
 `logs.values` block — each found only after it shipped, by someone noticing a value had vanished.
 Two further tests join the halves: the rendered page must emit every field name the decoder reads,
@@ -1266,7 +1200,7 @@ cannot leave a manifest naming an image that was never retrieved.
 the *next* field added to `seed.Seed`: one that nobody has taught the form about is unrepresentable
 by default, so a seed using it falls back to the raw-YAML pane rather than being saved without it.
 That pane is now a co-equal path rather than a fallback, and both routes converge on the same
-`internal/seed.Parse` and `Validate` a bundled seed loads through.
+`internal/seed.Parse` and `Validate` every seed loads through.
 
 **The editor is organised into five tabs — Identity, Art, Runtime, Networking, Install — beside
 a validation rail**, a visual pass over the same form above rather than a new one (ADR-079's
@@ -1322,9 +1256,9 @@ nothing could push one, so a seed authored on one control plane reached another 
 files. `internal/control/publish` is the outbound half, reusing `internal/seedpack` unchanged — so
 a seed published from the UI and one packed by CI are byte-identical artifacts, and the version
 rule that makes a catalog orderable is enforced by the same code in both. **Only the operator
-layer is published**, never the merged set: republishing the bundled and catalog seeds an operator
-never wrote, under their own channel, would mean a later `yggd` upgrade silently changing what
-they were shipping.
+layer is published**, never the merged set: republishing the catalog seeds an operator never
+wrote, under their own channel, would mean a later catalog update silently changing what they
+were shipping.
 
 **The catalog has a repository of its own** (`catalog.DefaultRepo`, `arasoi/yggdrasil-seeds`),
 separate from the one publishing binaries and container images. Publishing replaces a release
@@ -1387,7 +1321,7 @@ startup already loads every seed.
 
 ### Seeds are downloadable, and versioned independently of `yggd`
 
-A seed is data, but until ADR-060 the only way a fix to a bundled one reached an operator was a
+A seed is data, but until ADR-060 the only way a fix to an embedded one reached an operator was a
 new `yggd` release — so either `VERSION` climbed because a YAML file changed, or the shipped
 seeds drifted behind the repository. Seeds now have their own release channel.
 
@@ -1410,11 +1344,12 @@ channel from the `seed_channel` setting, which has nothing to do with what is ch
 branch and channel could disagree silently and promotion by merge would mean nothing. Publishing
 to its own releases also needs only `GITHUB_TOKEN`, so no personal access token exists to manage.
 
-`.github/workflows/seeds.yml` in *this* repository therefore lints and packs `seeds/library` on a
-**path filter over `seeds/`** and uploads nothing. That check still earns its place: packing loads
-every bundle through `internal/seed`, so a seed `yggd` could not load fails in CI rather than on an
-operator's control plane, and `seeds/library` remains the *embedded* set every fresh install starts
-with whether or not it is also published. `release.yml` additionally publishes
+*This* repository runs no seed workflow at all. It had one — `.github/workflows/seeds.yml`, which
+linted and packed `seeds/library` and uploaded nothing — and ADR-087 deleted it along with the
+embedded set it was checking: with no seeds here, the seeds repository's own CI is the only
+checker, which is this section's one-writer rule applied to checking as well as publishing.
+`make seeds-check` and `make seed-catalog` survive as author tools and now require `SEEDS=` naming
+a checkout. `release.yml` still publishes
 `ygg-seed-linux-<arch>`, because the seeds repository holds seeds rather than Go source and has to
 download the packer — checksum-verified against `SHA256SUMS`, since building it there would need a
 read credential for a private repository inside a public one's CI (ADR-081's amendment).
@@ -1428,13 +1363,26 @@ operations. Nothing in it reimplements the format: a seed it accepts is a seed `
 which is the property that makes it worth having at all. `ygg-seedpack` was a thin alias for its
 `pack` subcommand and is gone — see ADR-060's 2026-08-12 amendment.
 
-Seeds therefore load in **three layers** (`seed.Merge`, in order):
+Seeds therefore load in **two layers** (`seed.Merge`, in order):
 
 | Layer | Where | Why it is at this level |
 |-------|-------|-------------------------|
-| bundled | embedded in the binary (`go:embed`) | a fresh install has seeds with no network at all |
 | catalog | `<data_dir>/seeds/<id>/` | downloaded, updated on its own schedule |
 | operator | `--seeds-dir/<id>/` | hand-authored, so a catalog update can never overwrite it |
+
+There was a third beneath these — the set embedded in the binary — until ADR-087 removed it.
+The catalog repository (ADR-081) is where seeds are authored and published, so an embedded copy
+of the same content was a second producer of it that could only drift, and CLAUDE.md carried a
+standing rule to keep the two in step by hand. **A seed now reaches a control plane through the
+catalog or through `--seeds-dir`, and through nothing else.**
+
+The property that cost is ADR-060's own reason for embedding: a fresh install no longer has seeds
+with no network at all. `seed_channel` therefore defaults to `main` rather than to empty, so the
+catalog is *listed* without being configured first — installing any of it is still one click per
+seed, and setting the channel to empty still means no outbound call. An air-gapped control plane
+installs bundles by hand into either directory, which is what the operator layer has always been
+for. Both the startup log and the Seeds page say when there are no seeds and why, rather than
+showing an unexplained empty list.
 
 Downloaded bundles deliberately do **not** live in `--seeds-dir`: an update replaces a bundle
 wholesale, and that operation must be structurally incapable of reaching hand-written content.
@@ -1471,12 +1419,13 @@ are files the running binary did not ship, so closing a validation gap invalidat
 were perfectly acceptable when they were installed — and refusing to start then crash-loops the
 control plane over a file it could ignore, with no UI left through which to remove it. Startup
 and the in-process reload both use `seed.LoadDirTolerant`, logging each skipped bundle at error
-level and falling through to the layer beneath. Only `LoadFS` stays strict: the bundled set is
-embedded in the binary, so a failure there is a build defect with nothing behind it.
+level and falling through to the layer beneath. `LoadFS` stays strict, and is what the base image
+library and the seed fixture corpus load through: those are compiled in or checked in, so a
+failure there is a build defect rather than a file an operator installed.
 
 ## Container image library
 
-Every bundled seed's container image is either official (Paper's `eclipse-temurin`) or a
+A published seed's container image is typically either official (Paper's `eclipse-temurin`) or a
 well-known community one (Bedrock's `itzg/minecraft-bedrock-server`) — nothing a seed author
 writing an image from scratch could start from. `images/` (ADR-047) is a small, deliberately
 generic base image library filling that gap:
