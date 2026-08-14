@@ -1057,8 +1057,9 @@ Placement scheduling is deferred until a mixed fleet exists (ADR-016).
 The bundled seeds deliberately sit at opposite ends of ADR-018's install model, and all run
 end-to-end from the UI with no game-specific Go code:
 
-Three seeds expose their full documented configuration surface (ADR-076) — 44 controls for
-Paper, 26 for Bedrock, 136 for Vintage Story — grouped, typed, and with settings that depend on another
+Every bundled seed now exposes its full documented configuration surface — 171 controls for
+ARK, 136 for Vintage Story, 58 for Paper, 38 for Bedrock, 20 for Valheim — grouped, typed, and
+rendered as a tab rail with a page-level filter (ADR-085), with settings that depend on another
 (`rcon.password`, a resource pack's checksum) hidden until the setting they depend on is on.
 That dependency is declared by the seed as `show_if`, not encoded in the UI, so a new game
 stays a data change. A hidden control still submits, so visibility never becomes something the
@@ -1081,6 +1082,16 @@ through a whole-file `server.properties` template. Converting Paper is its own s
   server's own directory is exactly what that RPC already does.
 - **Bedrock** has no `install` block at all: its image downloads the official server itself at
   container start, the case ADR-018 already calls out as needing no separate install.
+- **ARK's configuration surface is 167 settings across 14 groups, and every one is
+  `optional`.** They patch `GameUserSettings.ini` and `Game.ini` (`manage: patch`, both
+  `importable`), where before this seed wrote no config file at all. Optional is what makes
+  that safe to ship: an absent optional setting leaves its key unwritten (ADR-077's
+  tri-state), so an existing server's hand-edited ini is not patched over by an unrelated
+  rebuild, and a fresh server still gets ARK's own defaults. The first save through the
+  settings form makes them present — an explicit act, which is the distinction being kept.
+  **None of it is verified against a running server**: the keys come from Wildcard's
+  documentation, phase 5's exit criterion is still open, and Unreal ignores an unknown ini
+  key silently, so a wrong spelling shows up as a setting that saves and does nothing.
 - **ARK Survival Ascended** (`seeds/library/ark-survival-ascended/seed.yaml`) exercises
   ADR-018 and ADR-020: a shared SteamCMD install mounted read-only at `/game`, per-server
   writable paths for saves and config, and a `/cluster` mount with the cluster id and
