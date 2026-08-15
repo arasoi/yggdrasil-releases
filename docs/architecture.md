@@ -187,6 +187,16 @@ can name a path. Deleting a server frees its directory and its archives, a move 
 node's copy, deleting an install frees its files once nothing references it, and the scheduler
 prunes archives past `backups.retention_days`.
 
+**Which install has an owner depends on whether it is shared** (ADR-096). A seed declaring
+`shared: false` gets a new install per server that nothing else can ever reference, so its
+lifetime is that server's and it is removed with it — on delete, on a move (the install does not
+travel, so the source's copy is immediately unreferenced), and on a failed creation. A *shared*
+install at refcount zero is deliberately kept: it is the cached depot the next server from that
+seed reuses, and removing it would turn deleting one of five ARK maps into a 50 GB re-download.
+That one stays the operator's, on `/installs`, where its server count already reads zero. The
+distinction was missed when the list above was drawn up, and a per-server install stranded 19 GB
+on every ordinary delete.
+
 **Reclamation is best-effort and nothing depends on it.** A pre-protocol-4 agent ignores the
 command, so every caller logs a failure and carries on — refusing to delete a server because its
 disk could not be freed would leave an operator with a row they cannot remove. The cost is an
@@ -641,6 +651,22 @@ is what makes log-value extraction work at all, since the values worth extractin
 during startup, long before an operator opens a console (ADR-067). A viewer arriving later
 reuses that same session rather than opening a second one, so this uses the property ADR-032
 already relies on rather than adding a second mechanism.
+
+**It attaches to every started server, not only the ones whose seeds declare a rule** (ADR-097).
+A container's opening burst is written once, and the daemon replays its log exactly once — when
+an attachment is opened — so a server nothing was reading kept its history only until the first
+viewer, and reached them through the *droppable* frames path rather than the blocking scrollback
+replay beside it. Watching from the start puts every server's history in the scrollback, where
+that blocking replay serves it, and stops the console's behaviour depending on a seed-authoring
+detail no operator can see. It costs one attachment per running server and nothing in the
+scanner, which returns immediately for a server with no rules.
+
+**A session dies with the run it attached to, not just with its pod.** A restart replaces the
+container while the session keyed by that server and role survives, so `Watch` would find it and
+attach to nothing at all — ADR-095's shape on a trigger it did not enumerate, since a crash-loop
+restart sends no `Destroy`. The previous run's sessions are closed on the way back up, and the
+attach retries briefly, because the supervisor applies `EventRestarting` *before* it starts the
+containers and a daemon refuses to attach to one that is not running yet.
 
 `internal/agent/logscan` assembles complete lines from those chunks — a container write splits
 anywhere, so matching raw chunks would miss any value straddling a read — and matches them against
