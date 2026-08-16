@@ -402,8 +402,8 @@ a case rather than a hypothesis — it ignores `InstallStart.steps`/`.image` and
 method/url/archive/filename/app_id fields a current control plane keeps writing for one release.
 What is still untested is that pairing against a real *older binary*: the negotiation logic is
 exercised against constructed version ranges (`internal/integration/n1_compat_test.go`) rather
-than against a released agent built before the bump, which is the same honesty the ARK and Dune
-Awakening entries below apply to their own exit criteria.
+than against a released agent built before the bump, which is the same honesty the ARK entry
+below applies to its own exit criterion.
 
 ### `yggd` watches its own release channel and can self-update
 
@@ -1129,8 +1129,11 @@ containers:
 | Memory | `-Xmx` **and** the container limit | container limit only |
 | Architectures | `amd64`, `arm64` | **`amd64` only** |
 
-**ARK** exercises shared installs and clusters. **Dune Awakening** exercises multi-container
-pods. Between them they cover all three axes.
+**ARK** exercises shared installs and clusters. **Dune Awakening** is what motivated
+multi-container pods, and is named here as the case the axis was designed for rather than as a
+target: it has no public dedicated-server image, so the pod mechanism is proven against a
+synthetic game+database+broker seed instead (see phase 6 below). Between them the three axes are
+covered.
 
 **Architecture.** Nodes report their architecture and seeds declare what they support;
 invalid placement is rejected with a clear error rather than an opaque exec-format crash-loop.
@@ -1142,12 +1145,20 @@ The seeds themselves live in `arasoi/yggdrasil-seeds` (ADR-081, ADR-087), which 
 authored, versioned and published, and where what each one covers is documented next to it. This
 document describes the *format* and the machinery; the catalog describes the games.
 
-That repository publishes five seeds at the time of writing — ARK Survival Ascended, Minecraft
-Java (Paper), Minecraft Bedrock, Valheim and Vintage Story — which between them exercise both ends
-of ADR-018's install model: a shared SteamCMD install mounted read-only with per-server writable
-overlays and cluster support at one end, and an image that installs the game itself with no
-install block at all at the other. Phase 5's and phase 6's exit criteria are stated against two of
-them and are tracked in the phase table below, not here.
+That repository publishes **six seeds on `main` and seven on `develop`** at the time of writing —
+ARK Survival Ascended, Minecraft Java (Paper), Minecraft Bedrock, Valheim, Vintage Story and
+Palworld, with Empyrion still on the edge channel. They exercise both ends of ADR-018's install
+model between them: a shared SteamCMD install mounted read-only with per-server writable overlays
+and cluster support at one end, and an image that installs the game itself with no install block
+at all at the other. Phase 5's exit criterion is stated against one of them and is tracked in the
+phase table below, not here.
+
+**A count here is a snapshot and will drift**, which it already did once — this paragraph said
+"five seeds" for as long as it took two more to be published, and nothing could have caught that,
+because the catalog is a separate repository on its own release cadence (ADR-081) and no test in
+this one can see it. Read the number as "roughly this many, as of the last edit"; the channel
+itself is authoritative, and the per-channel split is worth stating because promotion is a merge
+there too, so edge is routinely ahead.
 
 **What this repository keeps is a fixture corpus**, `internal/seed/seedtest`, six bundles written
 for coverage rather than for play. It exists because the embedded set was never only a shipping
@@ -1777,7 +1788,7 @@ binary and one database file.
 | 3 | **Done** | Console streaming (xterm.js) with stdin and multi-viewer fan-out. File browser, editor, and upload, sandboxed per server (ADR-033) | Play a full session end-to-end from the browser |
 | 4 | **Done** | Seed schema, Job entity, install pipeline with progress, config templating, allocations UI | Minecraft **Java and Bedrock** run from seeds alone, with no game-specific Go code |
 | 5 | **In progress** | Shared installs, refcounting, read-only mounts with writable overlays, clusters, orchestrated install updates | **ARK**: one install, five maps, character transfer between them, one-button update that stops and restarts exactly what was running |
-| 6 | **In progress** | Multi-container pods: per-pod networks, dependency ordering, health gates, reverse-order shutdown, `degraded`, sidecar log/stat views | **Dune Awakening**: game + database + broker start in order and stop safely |
+| 6 | **Done** | Multi-container pods: per-pod networks, dependency ordering, health gates, reverse-order shutdown, `degraded`, sidecar log/stat views | Start a game + database + broker pod in dependency order behind a health gate, crash-loop a sidecar into `degraded` and recover it, read each container's own logs and stats, and stop the pod in reverse order with the primary first |
 | 7 | **In progress** | Signed agent binary distribution, UI-triggered update, N-1 compatibility testing | Update every agent from the UI while servers stay up |
 | 8 | **Done** | Manual and scheduled backup and restore with per-container hooks, cluster volume backups, and resource graphs | Back up a multi-container pod, run its `pre` hook, destroy the database sidecar's data, restore it, and bring the pod back up running |
 
@@ -1856,14 +1867,35 @@ client has connected to confirm it); this proves one server booting, not phase 5
 install-with-character-transfer workflow; and it was driven with Podman directly, not yet through
 `yggd` and `ygg-agent` end to end.
 
-**Phase 6's mechanism is built and verified, but not yet against Dune Awakening by name.**
-Dependency-ordered start, health gates, reverse-order shutdown, sidecar crash-loop restart,
-and the console role selector and stats panel are all implemented and proven — including a
-full-stack test (real control plane, real `ygg-agent`, real Podman, no fakes) and a live
-browser session against a genuinely running multi-container pod — using a synthetic
-game+database+broker seed rather than the real thing, since Dune Awakening has no public
-dedicated-server image to build a real seed against yet. The exit criterion stays open until
-one does.
+**Phase 6 is done, against a criterion that was reworded to what the phase actually proves** —
+the same correction phase 8 already made, for the same reason, and it should have been made at
+the same time. It originally read "**Dune Awakening**: game + database + broker start in order and
+stop safely", and every word of that except the game's name was met: dependency-ordered start,
+health gates, reverse-order shutdown with the primary first, sidecar crash-loop restart into
+`degraded`, and the console role selector and stats panel are all implemented and proven by a
+full-stack test (real control plane, real `ygg-agent`, real Podman, no fakes) and a live browser
+session against a genuinely running multi-container pod.
+
+What was never met is the name. **Dune Awakening has no public dedicated-server image**, so there
+is no seed to build against and no amount of work in this repository can produce one — the
+criterion was hostage to a third party's release decision rather than to anything here. Phase 8's
+row was reworded on exactly that reasoning ("naming that game in a backup phase's criterion made
+this phase's completion hostage to a dependency that has nothing to do with backups") and then
+pointed at this row as the place the dependency legitimately belonged. That was wrong: the
+dependency does not belong anywhere. A multi-container pod is the capability, and Dune Awakening
+was only ever the example that motivated it.
+
+So the criterion now describes what a multi-container pod must do, and it is met against the
+synthetic game+database+broker seed — which is the *right* target rather than a stand-in, because
+what is being proven is the pod mechanism and a synthetic seed exercises its corners more
+deliberately than any one game would. **A real Dune Awakening seed remains wanted** and is
+tracked as catalog work in `arasoi/yggdrasil-seeds` where every other game lives (ADR-087), not
+as a phase gate here.
+
+The honest limit, carried forward rather than read as covered: no seed in the published catalog
+declares more than one container, so the multi-container path has never run against a game an
+operator actually plays. That is a gap in the *catalog*, and it is the same gap whether this row
+says "in progress" or "done".
 
 **Phase 7's mechanism is built and verified end-to-end, including live in the browser**: sign
 and register a binary, click Update on a connected node, and watch a real agent process
@@ -1888,8 +1920,14 @@ running. But it was met against the same synthetic game+database+broker seed pha
 the same reason — there is no public Dune Awakening image to build a real seed against — so
 naming that game in a backup phase's criterion made this phase's completion hostage to a
 dependency that has nothing to do with backups. The criterion now describes the capability
-that was demonstrated, and **Dune Awakening by name remains phase 6's open item**, where the
-dependency actually belongs.
+that was demonstrated.
+
+This paragraph used to end "**Dune Awakening by name remains phase 6's open item**, where the
+dependency actually belongs", and that was half right. Moving the dependency off a backup phase
+was correct; parking it on phase 6 was not, because it does not belong on any phase — a game with
+no public server image cannot be a gate on work that is finished. Phase 6's row has since been
+reworded on the same reasoning, and a real Dune Awakening seed is catalog work rather than a
+phase item.
 
 Nothing is outstanding from the original scope. What the table's row bundled in but ADR-042
 deferred as its own follow-on work rather than shoehorning into that round — a cron-like
