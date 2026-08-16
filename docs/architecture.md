@@ -668,39 +668,25 @@ that blocking replay serves it, and stops the console's behaviour depending on a
 detail no operator can see. It costs one attachment per running server and nothing in the
 scanner, which returns immediately for a server with no rules.
 
-**A session dies with the run it attached to, not just with its pod.** A restart replaces the
-container while the session keyed by that server and role survives, so `Watch` would find it and
-attach to nothing at all — ADR-095's shape on a trigger it did not enumerate, since a crash-loop
-restart sends no `Destroy`. The previous run's sessions are closed on the way back up, and the
-attach retries briefly, because the supervisor applies `EventRestarting` *before* it starts the
-containers and a daemon refuses to attach to one that is not running yet.
+**A session is bound to the container run it attached to** (ADR-100). A session is keyed by
+server and role and reused across viewer churn, which is right until the container behind it is
+replaced — then it answers for a run that no longer exists and `Watch`, finding it, attaches to
+nothing at all. That was fixed three times in eight days, each fix enumerating one more event
+that ends a run: a destroyed pod (ADR-095), a crash-loop restart (ADR-097), then the four
+transitions *up* that replace nothing and must not close a live attachment (ADR-098).
 
-**Closed only when the run actually ended, though** (ADR-098). "On the way back up" is not the
-same question as "was the container replaced": half the transitions into `starting` or `running`
-leave the primary exactly where it was — readiness resolving, a *sidecar* recovering from
-`degraded`, an operator restarting a live server — and closing a live attachment closes the
-hijacked attach connection, which sends the container's stdin the EOF ADR-032 exists to prevent.
-It also forces the next attach to be a new one, and an attach replays the whole container log, so
-every historical line is scanned again: log events are deliberately not deduplicated, and a crash
-pattern matched a second time kills a pod that is running perfectly well. The close is therefore
-gated on the *previous* state being `crashed` or `offline`, which are exactly the states a
-primary's own exit produces. Reopening stays unconditional, since `Watch` reuses an open session.
+Enumeration is the wrong shape for it, so the run is measured instead. A session records the
+container id and start time it attached to, and `attach` compares that against the run holding
+that server and role now; different means stale, and the session is replaced by construction on
+whatever event caused it. Both halves of that identity matter — a reprovision gives a new
+container, while a crash-loop restart reuses the same one and only moves its start time, which
+is exactly the case an id-only check would miss. An unresolvable run reads as "do not know"
+rather than "changed", so a daemon hiccup can never be the reason a live attachment is torn
+down.
 
-**A pending attach is called off when the server stops** (ADR-098). The attach retries for a
-second or so off the receive path, so it outlives the command that started it; a destroy landing
-in that window closes the sessions that exist and then the retry opens one behind it, which for a
-reprovision — destroy and recreate under the same server id — is ADR-095's stale session reachable
-from an ordinary settings save. Stop, kill and destroy all call it off, and a destroy additionally
-closes a session that lands anyway. Only a destroy: a *stopping* container is still being written
-to by its own graceful stop, so closing there would EOF the stdin that stop depends on.
-
-**An adopted server is watched too.** Adoption publishes no state change and the control plane
-sends no `Start` for a server it already believes running, so neither path that opens an
-attachment fires after an agent restart — every server on a restarted agent went unread. The
-transport opens one for each adopted server it finds running or degraded, before its first
-connect, since whether an agent reads its own servers must not wait on the control plane being
-reachable. Its seed's rules still arrive only with the next spec, so the scanner stays inert for
-such a server until it is rebuilt; what this restores is the console's history.
+**A pending attach is still called off when the server stops** (ADR-098), and a destroy still
+closes a pod's sessions promptly (ADR-095). Neither is load-bearing now — the comparison above
+would catch the same thing at the next attach — but both free an attachment sooner than that.
 
 `internal/agent/logscan` assembles complete lines from those chunks — a container write splits
 anywhere, so matching raw chunks would miss any value straddling a read — and matches them against
