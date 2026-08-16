@@ -1654,11 +1654,12 @@ language-selection path unexercised by construction, a test injects a second cat
 a real request through `render()`, asserting it renders in that language, declares it, and falls
 back to English for a key it lacks.
 
-Two limits are carried forward rather than read as done. About 150 template fragments are
-sentences split by inline markup, where each fragment is half a sentence that cannot be translated
-alone; fixing them means restructuring the markup per site. And **seed content is specified but not
-built** — a seed's own labels and descriptions are the majority of what an operator reads on a
-settings page, and ADR-086 records the design: per-language files inside the bundle
+One limit is carried forward rather than read as done. The ~150 template fragments that were
+sentences split by inline markup — each half a sentence that could not be translated alone — are
+done: `TH` carries a message with its markup, extraction is at zero untranslated fragments, and the
+coverage report that counted them down is a gate rather than a report. What remains is that
+**seed content is specified but not built** — a seed's own labels and descriptions are the
+majority of what an operator reads on a settings page, and ADR-086 records the design: per-language files inside the bundle
 (`<seed-id>/locales/<lang>.yaml`), keyed by the declared control name rather than by source text
 (a seed author may not write in English), with a stale entry as a lint warning rather than a load
 error and missing entries falling back to the seed's own text.
