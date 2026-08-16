@@ -400,10 +400,17 @@ something against, which it did not when this was written: ADR-077's install-ste
 negotiated protocol to 2 while `MinProtocol` stayed 1, so a protocol 1 agent genuinely exists as
 a case rather than a hypothesis — it ignores `InstallStart.steps`/`.image` and reads the older
 method/url/archive/filename/app_id fields a current control plane keeps writing for one release.
-What is still untested is that pairing against a real *older binary*: the negotiation logic is
-exercised against constructed version ranges (`internal/integration/n1_compat_test.go`) rather
-than against a released agent built before the bump, which is the same honesty the ARK entry
-below applies to its own exit criterion.
+That pairing is now proven against **real older binaries**, not only against constructed ranges.
+`hack/n1-check.sh` walks `version.go`'s own history for the last commit that shipped each
+protocol below the current one, builds an agent from each in a git worktree with that commit's
+own `VERSION`, and pairs all of them with a current control plane at once. Every protocol from
+the floor up negotiates its own version rather than the newest, and every one is flagged as
+behind in the UI.
+
+`internal/integration/n1_compat_test.go` keeps its constructed ranges and is not superseded by
+this: it can pose a peer *newer* than this binary, and one too old to overlap at all, neither of
+which any checkout can produce. What it cannot do is prove that an agent somebody actually
+shipped still works, which is the half the script covers.
 
 ### `yggd` watches its own release channel and can self-update
 
@@ -1789,7 +1796,7 @@ binary and one database file.
 | 4 | **Done** | Seed schema, Job entity, install pipeline with progress, config templating, allocations UI | Minecraft **Java and Bedrock** run from seeds alone, with no game-specific Go code |
 | 5 | **In progress** | Shared installs, refcounting, read-only mounts with writable overlays, clusters, orchestrated install updates | **ARK**: one install, five maps, character transfer between them, one-button update that stops and restarts exactly what was running |
 | 6 | **Done** | Multi-container pods: per-pod networks, dependency ordering, health gates, reverse-order shutdown, `degraded`, sidecar log/stat views | Start a game + database + broker pod in dependency order behind a health gate, crash-loop a sidecar into `degraded` and recover it, read each container's own logs and stats, and stop the pod in reverse order with the primary first |
-| 7 | **In progress** | Signed agent binary distribution, UI-triggered update, N-1 compatibility testing | Update every agent from the UI while servers stay up |
+| 7 | **Done** | Signed agent binary distribution, UI-triggered update, N-1 compatibility testing | Update every agent from the UI while servers stay up — including an agent four protocol versions behind, with its server running throughout (`hack/n1-check.sh`) |
 | 8 | **Done** | Manual and scheduled backup and restore with per-container hooks, cluster volume backups, and resource graphs | Back up a multi-container pod, run its `pre` hook, destroy the database sidecar's data, restore it, and bring the pod back up running |
 
 **Phase 2 must model a server as a pod from the start**, even though every pod has exactly one
@@ -1901,15 +1908,36 @@ says "in progress" or "done".
 and register a binary, click Update on a connected node, and watch a real agent process
 download, verify, install, drain, exit, and — restarted the way systemd would — reconnect
 running the new version with the job resolving automatically. See "Agent updates are pushed
-from the UI" above for the full sequence and ADR-040/ADR-041 for the design. The exit criterion's
-N-1 half **has since gained the real history it was waiting for**: the protocol is 3 with
-`MinProtocol` 1, so "a current control plane talking to a protocol 1 agent" is a live
-configuration rather than the hypothesis this entry used to describe — and the supported window
-is now two steps wide rather than one, since ADR-077 took it to 2 and ADR-082 to 3 while the
-floor stayed put. It stays open on a narrower
-point than before — the pairing is tested against constructed version ranges rather than against
-an agent binary actually built before the bump, which is the one thing a released `qa` or `main`
-artifact from before ADR-077 could now supply.
+from the UI" above for the full sequence and ADR-040/ADR-041 for the design.
+
+**The N-1 half is closed too, and the criterion is met in full.** It could not have been when it
+was written: `Protocol == MinProtocol == 1`, so there was no older peer in existence to build,
+and the negotiation could only be exercised against constructed ranges. The protocol is 5 now
+with the floor still at 1, so four older peers genuinely exist — and `hack/n1-check.sh` builds
+one from each of the commits that shipped them (0.11.0 at protocol 1, 0.39.0 at 2, 0.40.1 at 3,
+0.44.0 at 4) and runs the whole criterion against them. Verified end to end on a real control
+plane with real Podman:
+
+- all four negotiate their own protocol against a protocol 5 control plane, not the newest, and
+  all four are flagged as behind in the UI (ADR-014's own promise, which had never been checked
+  against a binary that was really behind);
+- a real container runs on the **protocol 1** node, four protocol versions and 37 releases
+  behind the control plane driving it;
+- that agent updates itself from the UI — downloads over `DownloadAgentBinary`, verifies the
+  digest and the signature against the key it pinned at enrollment, installs, keeps the old
+  binary at `.previous`, drains and exits zero;
+- **the container keeps running through the window when no agent exists at all**, which is the
+  half of "while servers stay up" that a same-version update never really tests;
+- the restarted agent comes back as 0.48.1 at protocol 5, on the *same node id* — identity
+  survived, no re-enrollment (ADR-052's blocker never fires) — and adopts the running server
+  from its container labels;
+- the `agent_update` job resolves itself on that reconnect, which is the only completion signal
+  this job type ever produces (ADR-021's amendment);
+- and it is the same container with the same start time, so it was never restarted.
+
+The one thing not proven is a *cross-architecture* update, since both binaries here are built
+for the host. That is the same limit every live verification in this document has, and the
+architecture is checked before an update is offered rather than at install time.
 
 **Phase 8 is done, against a criterion that was reworded to what the phase actually proves.**
 It originally read "restore a Dune pod including its database", and that sentence was met
