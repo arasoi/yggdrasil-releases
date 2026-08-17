@@ -298,18 +298,24 @@ is nonetheless modeled as a storage backend (`local` now, `nfs` or similar later
 cluster's node binding nullable, so cross-node clustering becomes a new backend rather than a
 schema change (ADR-020).
 
-Clusters are a first-class `clusters` table with a globally-unique name (ADR-037), created or
-joined from the server-from-seed form: a seed that declares `cluster.supported` shows an
-optional cluster name field, where a new name creates a cluster bound to the chosen node, an
-existing name on that node joins it, and an existing name bound to a different node is
-rejected with a message naming the right one.
+Clusters are a first-class `clusters` table with a globally-unique name (ADR-037) and a
+recorded `seed_id` naming the game they are for (ADR-102) — the fact everything else about
+clusters turned out to need. **A cluster is created from `/clusters`, on its own**, before any
+server joins it: a name, a seed filtered to those declaring `cluster.supported`, and a node.
+Creating one writes only the row; the shared volume is a directory `ensureMountSources` creates
+when the first member's containers are actually built (ADR-018), and the page says so rather
+than implying the volume already exists. A server joins from a dropdown listing every cluster
+for the seed it is being created from, each option naming its node — a mismatch is refused with
+a message naming the right node — and an existing server joins or leaves from the cluster's own
+page or from `/clusters`, both offering a select of *eligible* servers: same seed, same node,
+not already in a cluster.
 
 `/clusters` lists every cluster with its node and members; `/clusters/{id}` is the cluster
-itself (ADR-080) and is where one is managed (ADR-066): rename it, take a member out, back it
-up, set its schedule, or delete it. It needs no new query — the same data the list already
-gathers for every cluster, gathered for one — and shows its members as the same art cards the
-fleet uses, since a cluster's members are peers with their own pages. **Joining is still only
-possible through server creation** — this page can empty a cluster but not fill one.
+itself (ADR-080) and is where one is managed (ADR-066): rename it, add or remove a member, back
+it up, set its schedule, or delete it. It needs no new query beyond the eligible-member list —
+the same data the list already gathers for every cluster, gathered for one — and shows its
+members as the same art cards the fleet uses, since a cluster's members are peers with their own
+pages.
 
 Every operation there is guarded by something the schema does not enforce, because
 `servers.cluster_id` has no foreign key: deleting a cluster is refused while it still has
@@ -317,6 +323,28 @@ members (the row would otherwise vanish underneath every one of them, still moun
 volume), and while a cluster backup or restore is in flight. Removing a member clears the
 column *and* rebuilds that server's pod, since the `/cluster` mount and `-clusterid=` argument
 are fixed into the container at create time and the column alone changes nothing the game sees.
+
+**A cluster also carries `variables` and `settings`, the same shape a server's own stored
+values take, that its members inherit** (ADR-103). Nothing is inherited unless the cluster
+deliberately manages a name — its two columns start empty, and a name neither the cluster nor
+a member manages falls through to the seed's ordinary default exactly as it always has. One
+function, `storedFor`, composes the two layers (a server's own values winning name for name)
+and every place that used to build a server's resolved variables and settings directly — the
+pod spec, config files, the connect block, a backup's hooks, an install update, settings
+import's comparison — now routes through it, so there is one place the composition can be
+gotten right rather than six.
+
+`/clusters/{id}/settings` is where an operator sets what the cluster manages; a member's own
+Settings page shows every overridable control with a `manage_<name>` checkbox beside it —
+checked means this server's own value wins and is written to its own row, unchecked means the
+name is left out of that row entirely and the server keeps following the cluster. The identical
+mechanism serves both ends: a cluster's own settings page is the same rendering with nothing
+above it to inherit from, so deciding what the cluster manages at all uses the same toggle a
+member later uses to claim a name back. Saving a cluster's values rebuilds every member
+sequentially — the same shape a seed rollout already uses (`handleRebuildSeedServers`) and for
+the same reason: five maps rebuilding on one node at once turns a routine change into a
+coordinated outage — and an offline node or a failed rebuild is reported by name rather than
+silently dropped.
 
 **The shared volume is deleted only if explicitly asked for**, as a separate checkbox on the
 delete, since it is a different loss from the row — for ARK it is every character ever
