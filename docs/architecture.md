@@ -315,7 +315,9 @@ itself (ADR-080) and is where one is managed (ADR-066): rename it, add or remove
 it up, set its schedule, or delete it. It needs no new query beyond the eligible-member list —
 the same data the list already gathers for every cluster, gathered for one — and shows its
 members as the same art cards the fleet uses, since a cluster's members are peers with their own
-pages.
+pages. Its overflow menu also reaches `/clusters/{id}/settings` and `/clusters/{id}/files`
+(ADR-105) — its values and its shared volume, the two things that exist at the cluster level
+rather than on any one member.
 
 Every operation there is guarded by something the schema does not enforce, because
 `servers.cluster_id` has no foreign key: deleting a cluster is refused while it still has
@@ -345,6 +347,16 @@ sequentially — the same shape a seed rollout already uses (`handleRebuildSeedS
 the same reason: five maps rebuilding on one node at once turns a routine change into a
 coordinated outage — and an offline node or a failed rebuild is reported by name rather than
 silently dropped.
+
+**Joining a cluster at creation starts from full inheritance, not a snapshot of whatever the
+creation form happened to show.** The creation form has no per-control toggle of its own — adding
+one to every field on a form that can already run to dozens of controls would trade a default
+nobody wants for a decision on every field — so `clusterCreationOverrides` decides by comparison
+instead: a resolved value equal to what the server would inherit (the cluster's own value for a
+name it manages, the seed's default otherwise) is left off the new row entirely, and only a value
+that genuinely diverges — ARK's `map`, chosen differently per member — is stored. A server created
+into a cluster therefore opens its Settings page with nothing pinned to itself except what
+actually needed to be.
 
 **The shared volume is deleted only if explicitly asked for**, as a separate checkbox on the
 delete, since it is a different loss from the row — for ARK it is every character ever
@@ -796,6 +808,15 @@ for a server somebody configured by hand, or a file edited before the seed had a
 key. Only values that differ are adopted, and a file that could not be read whole contributes
 nothing, which is the same judgement patching makes in the other direction.
 
+**A cluster's shared volume gets the same six operations**, at `/clusters/{id}/files`
+(ADR-105). It cannot reuse a server's sandbox — that is rooted per server (ADR-033) and a
+cluster volume sits outside every such root by design, the same reason `DeleteClusterVolume`
+(ADR-066) already needed its own command — so the six wire messages carry an alternate
+`cluster_id` alongside `server_id`, mutually exclusive, and one agent-side dispatcher
+(`filesRoot`) resolves whichever root the request actually names. No `file_denylist` applies
+there: that is a seed's own declaration about one server's writable paths, and a cluster's
+shared volume has no seed of its own to declare one over it.
+
 **Bulk data** is always proxied through the control plane; direct browser-to-agent transfer
 was considered and rejected (ADR-011). Uploads and downloads go through the same JSON-free
 HTTP handlers as the rest of the UI, bounded to 64 MiB per upload.
@@ -877,6 +898,14 @@ it. The band is height-capped so a wide card does not become mostly artwork. Thi
 finally consumes the artwork ADR-077 and ADR-079 built the whole path for; before it, a banner
 appeared on exactly one page as a 120px inline image. Most seeds ship none, so the card falls
 back to a striped placeholder carrying the seed's own glyph, and that is the path built first.
+
+**A card carries its own start/restart/stop, not only a link to the server's page** (ADR-084's
+amendment). The whole-card-is-the-link property survives as a stretched `<a>` layered under the
+buttons rather than being the card element itself, since a `<form>` cannot nest inside an `<a>`.
+Restart is Stop immediately followed by Start with desired state held at running throughout — the
+same back-to-back sequencing a reprovision already uses for Stop immediately followed by Destroy —
+and a button disables itself when its node is disconnected rather than dispatching a command
+guaranteed to come back undelivered.
 
 **A cluster is one card, not one per member.** Its members are reached through it, at
 `/clusters/{id}` — the page ADR-066 built rename, remove-member and delete without, putting all
