@@ -143,6 +143,17 @@ wrong is silent: the server starts, logs nothing wrong, and refuses connections 
 **Job** — a long-running operation with streamed progress: install, install update, backup,
 restore, agent update. One mechanism rather than four (ADR-021).
 
+**An install stuck by a control-plane restart self-heals**, up to a small bounded number of
+attempts, and stays repairable by hand past that (ADR-106). `ReconcileInterruptedInstalls`
+(ADR-021, ADR-101) still runs once at startup, but rather than marking an interrupted install
+`failed` outright, it leaves one with at least one server still waiting on it ready to retry —
+resuming is sound because SteamCMD's own `app_update ... validate` reconciles a partial download
+in place (ADR-091) rather than re-fetching from zero. Nothing is dispatched at that call site,
+since no node has connected yet at that point in `cmd/yggd`'s startup; the retry itself is
+dispatched once the install's node reconnects. An install genuinely reported failed by its
+agent — a real error, not an interruption — is never touched by self-heal at all, only by the
+**Retry** action on `/installs` and on a crashed server's own page, which carries no attempt cap.
+
 ## Storage layout
 
 ```
