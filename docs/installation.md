@@ -1,7 +1,7 @@
 > Mirrored automatically from the (private) source repository's
-> `docs/installation.md` at build time. The "Build from source"
-> section below only works if you have access to that repository —
-> everyone else should use "Download", which is the normal path.
+> `docs/installation.md`. The "Build from source" section below
+> only works if you have access to that repository — everyone else
+> should use "Download", which is the normal path.
 
 # Installing Yggdrasil
 
@@ -12,10 +12,12 @@ purely mechanical — what to run, in what order, on which machine.
 
 There is no `.deb` or container image, but there is nothing to build either:
 CI produces a Linux binary for both `yggd` and `ygg-agent` on every push to
-each of the project's three branches (`.github/workflows/release.yml`), so
-grabbing one from the public release repository's GitHub Releases page is the
-normal path. Building from source is only needed if you are contributing
-changes.
+each of the project's three branches that changes them
+(`.github/workflows/release.yml` — documentation never triggers a release,
+and only the binaries a push actually affected are rebuilt, so each binary's
+version moves when its own code does, ADR-093/ADR-111), and grabbing one from
+the public release repository's GitHub Releases page is the normal path.
+Building from source is only needed if you are contributing changes.
 
 ## Layout
 
@@ -111,7 +113,7 @@ On **each node host**:
 - systemd, to supervise the agent and restart it (`Restart=always`) if it
   ever exits. The agent does not restart itself.
 - **Nothing for SteamCMD.** A seed with a `steamcmd` install step (ARK
-  Survival Ascended and Valheim, among the bundled ones) runs it in a
+  Survival Ascended and Valheim, among the catalog's seeds) runs it in a
   container on the node rather than on the host (ADR-057), so there is no
   `steamcmd` binary to install and no `PATH` to arrange. What the node does
   need is to be able to pull `ghcr.io/arasoi/base-steamcmd:release-latest`.
@@ -129,9 +131,10 @@ but that is only ever required on whichever machine does the build.
 
 ### Download (recommended)
 
-Every push to `develop`, `qa`, and `main` rebuilds the binaries and
-publishes them as a GitHub Release in the public release repository for that
-branch — see [Release channels](#release-channels) below for which one to use.
+Every push to `develop`, `qa`, and `main` that changes the software rebuilds
+the binaries it affected and republishes the channel's GitHub Release in the
+public release repository — a binary the push did not touch is carried
+forward unchanged, keeping the version it was last built at (ADR-111) — see [Release channels](#release-channels) below for which one to use.
 From that repository's **Releases** page, or with `gh`:
 
 ```bash
@@ -467,11 +470,12 @@ your role updates the binary and restarts the service without touching your
 existing config (see "Quick install" above). The manual paths below are the
 same thing done by hand.
 
-### Updating to 0.44.0 from an earlier release: install your seeds first
+### Updating past the seed unbundling: install your seeds first
 
 Seeds are no longer built into `yggd` (ADR-087). They are downloaded from the
-catalog, and 0.44.0 is the release where a control plane stops having any of
-its own.
+catalog, and the unbundling shipped in the late 0.43.0 builds on `develop` —
+so 0.44.0 and later everywhere, plus any 0.43.0 build published after it, is a
+control plane with no seeds of its own.
 
 **Your servers keep running.** Agents supervise them independently of the
 control plane, so nothing goes down. But a seed-driven server rebuilds its pod
@@ -494,7 +498,7 @@ installed seed sits in the data directory rather than in the binary and
 survives the upgrade.
 
 Two things worth knowing while you are there. The catalog's seeds are newer
-than the ones 0.43 and earlier bundled, so the first start after installing
+than the ones earlier builds bundled, so the first start after installing
 rebuilds that server's pod from a newer definition -- seed migrations carry
 your stored settings across, which is what they exist for, but the change
 happens on that start rather than when you choose it. And a control plane with
