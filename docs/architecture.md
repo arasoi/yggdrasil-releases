@@ -381,6 +381,18 @@ pod spec, config files, the connect block, a backup's hooks, an install update, 
 import's comparison — now routes through it, so there is one place the composition can be
 gotten right rather than six.
 
+**A setting the seed marks `cluster_default` is managed from the moment the cluster exists**
+(ADR-112), rather than starting empty and waiting on an operator to open `/clusters/{id}/settings`
+and check boxes by hand. `handleCreateCluster` seeds the cluster's own `settings` column, right
+after writing the row, with every `cluster_default` setting's own declared default — the exact
+values `/clusters/{id}/settings` would otherwise need an operator to enter one by one before a
+single member could inherit anything. This is deliberately narrow: it exists at cluster
+*creation* only, never retroactively applied to a cluster made before a seed gained the field, and
+it covers `settings` only — a *variable* is far more often the thing meant to differ per member
+(ARK's own `map`), so there is no equivalent for `variables`. Everything downstream is unchanged:
+a member created afterward inherits exactly as `storedFor` already composes, and an operator can
+still override any one control per server through the same `manage_<name>` toggle described below.
+
 `/clusters/{id}/settings` is where an operator sets what the cluster manages; a member's own
 Settings page shows every overridable control with a `manage_<name>` checkbox beside it —
 checked means this server's own value wins and is written to its own row, unchecked means the
