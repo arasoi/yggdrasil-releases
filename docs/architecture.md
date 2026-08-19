@@ -126,6 +126,30 @@ a different protocol, how a seed asks for one number on both TCP and UDP (Vintag
 allocate as one atomic group (`store.AllocatePortGroup`, ADR-083): a base candidate is accepted
 only once every sibling's derived number is confirmed free too, so a collision moves the whole
 group to the next candidate rather than stranding one member with the other already claimed.
+An offset must be zero or positive, so a derived port's number is never below its own base's —
+zero is the identity case a same-number sibling needs, and anything negative would put the
+"base" above its own "derived" port (ADR-109).
+
+**A port number, once allocated, is claimed on every protocol, not only the one holding it**
+(ADR-109). Two servers cannot independently land on 25565 just because one asked for it on tcp
+and the other on udp, and neither can one server's own two ports. The **only** sanctioned
+exception is the same-number-sibling group the paragraph above already describes: a base and
+its offset-0 sibling are checked and inserted together in one atomic transaction, so neither
+sees the other as "in use" — nothing outside that one call ever gets the same courtesy. An
+operator's own pinned port is held to the same rule as a seed's declared default: it must sit
+inside the node's configured range, never reserved exactly outside it the way an offset-derived
+port's number legitimately can be, since the operator typed it themselves rather than having it
+dictated by the game.
+
+**A node's port conflicts can be found and repaired from the Allocations page.** A conflict —
+a number two unrelated servers both ended up holding, which the rule above no longer permits a
+fresh allocation to create — can still exist from before the rule did, or from an operator's
+own pin, or a race this project has since closed. `/allocations` groups every reservation by
+node, with that node's clusters nested inside it the same way the fleet page groups server
+cards (ADR-054's amendment); a node with a conflict shows which port numbers and offers
+"Remap conflicting ports", which releases and reallocates only the losing side of each
+conflict — the earliest-created holder of a number keeps it — and rebuilds those servers'
+pods, sequentially, so the new numbers actually reach the running containers.
 
 The `ip` in that tuple is the **bind** address — always `0.0.0.0` — and part of the row's
 unique key. It is not a connect address, and was shown as one until ADR-065: a server's page
