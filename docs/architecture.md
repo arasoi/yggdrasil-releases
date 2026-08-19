@@ -165,7 +165,7 @@ command, has to be handed the port through env instead — Bedrock's `SERVER_POR
 wrong is silent: the server starts, logs nothing wrong, and refuses connections (ADR-061).
 
 **Job** — a long-running operation with streamed progress: install, install update, backup,
-restore, agent update. One mechanism rather than four (ADR-021).
+restore, server move, agent update. One mechanism rather than six (ADR-021).
 
 **An install stuck by a control-plane restart self-heals**, up to a small bounded number of
 attempts, and stays repairable by hand past that (ADR-106). `ReconcileInterruptedInstalls`
@@ -271,16 +271,26 @@ any daemon speaking that API works, and the conformance suite is what defines "w
 // Implementations must be safe for concurrent use across different server IDs.
 type Runtime interface {
     Provision(ctx context.Context, spec PodSpec) error
-    Start(ctx context.Context, id ServerID) error
-    Stop(ctx context.Context, id ServerID, spec StopSpec) error
+    Start(ctx context.Context, spec PodSpec) error          // dependency-ordered, health-gated
+    Stop(ctx context.Context, spec PodSpec, stop StopSpec) error
     Kill(ctx context.Context, id ServerID) error
+    StartContainer(ctx context.Context, id ServerID, role string) error
     Attach(ctx context.Context, id ServerID, role string) (Console, error)
+    Exec(ctx context.Context, id ServerID, role string, cmd []string) ([]byte, int, error)
+    RunOnce(ctx context.Context, spec RunOnceSpec, out io.Writer) (int, error)
     Stats(ctx context.Context, id ServerID) (map[string]Stats, error)
     Status(ctx context.Context, id ServerID) (PodStatus, error)
     Destroy(ctx context.Context, id ServerID) error
-    Adopt(ctx context.Context) ([]AdoptedPod, error)  // rebuild state from labels
+    Adopt(ctx context.Context) ([]PodStatus, error)         // rebuild state from labels (ADR-012)
+    Events(ctx context.Context) (<-chan Event, error)       // exit watching beats polling
+    ReapOrphans(ctx context.Context) (OrphanReport, error)  // startup leftover sweep (ADR-088)
 }
 ```
+
+`Start` and `Stop` take the full `PodSpec` rather than an id, because after an agent restart
+container labels carry identity only, never configuration (ADR-012) — the dependency graph
+must arrive fresh on every call. The three widenings past the original lifecycle set each
+carry their own ADR: `Exec` (ADR-042), `RunOnce` (ADR-057), `ReapOrphans` (ADR-088).
 
 `PodSpec` carries one or more `ContainerSpec` entries, their dependency edges, mounts, and
 allocations. Console attach and stats are role-addressed because a pod has more than one
@@ -474,7 +484,7 @@ path (a tampered checksum is rejected before anything is installed) — see
 something against, which it did not when this was written: ADR-077's install-steps work took the
 negotiated protocol to 2 while `MinProtocol` stayed 1, so a protocol 1 agent genuinely exists as
 a case rather than a hypothesis — it ignores `InstallStart.steps`/`.image` and reads the older
-method/url/archive/filename/app_id fields a current control plane keeps writing for one release.
+method/url/archive/filename/app_id fields a current control plane still writes alongside the steps.
 That pairing is now proven against **real older binaries**, not only against constructed ranges.
 `hack/n1-check.sh` walks `version.go`'s own history for the last commit that shipped each
 protocol below the current one, builds an agent from each in a git worktree with that commit's
@@ -525,6 +535,17 @@ writing the manifest into `public-assets/`, so it is not in that file and never 
 is correct for what it is: a version label shown in the UI and recorded alongside a registered
 agent binary, never executed. Every binary is still verified against the published checksum
 before anything is installed or signed.
+
+**A release's binaries do not necessarily share one version** (ADR-111): a push rebuilds only
+the binaries it actually affected, and the rest are carried forward byte-identical at the
+version they were last built at — so a yggd-only change no longer restamps the agent binary,
+and nodes stop reading "Rebuild ready" for agent code nobody touched. The manifest carries a
+per-binary `binaries` map; `channel.version` is the yggd binary's version. Each consumer reads
+its own binary's entry: yggd's self-update compares the running build against `binaries.yggd`,
+and a fetched agent binary is registered under `binaries.ygg-agent` — the version the node
+running it will actually report back, which the agent-update job's completion check depends on
+matching. Documentation changes trigger no release at all; the two mirrored docs are synced by
+their own workflow (`docs-sync.yml`).
 
 Clicking it downloads the matching binary and the release's `SHA256SUMS`, verifies the checksum,
 and atomically replaces the running binary (`internal/control/selfupdate`, the same
@@ -661,9 +682,9 @@ even launched. The agent watches the Docker event stream for exits rather than p
 returns as soon as the command is accepted; completion arrives asynchronously as a state
 change event pushed to the browser over WebSocket.
 
-**Long-running operations** (install, install update, backup, restore, agent update) become
-Jobs. The agent streams progress up the control channel; the control plane persists job state
-and relays to any watching browser. A job survives the operator closing their tab and, where
+**Long-running operations** (install, install update, backup, restore, server move, agent
+update) become Jobs. The agent streams progress up the control channel; the control plane
+persists job state and relays to any watching browser. A job survives the operator closing their tab and, where
 the underlying work permits, an agent reconnect (ADR-021).
 
 **Live state** — `hub.EventHub`, the console hub's sibling, fans state changes out to every
@@ -1075,9 +1096,11 @@ things deliberately do **not** travel, for the same reason: a step's `if` is eva
 control plane and a false step is simply not sent, and a symbolic base image is resolved by the
 control plane — so the agent still needs no access to a seed's variables or to the release
 channel (ADR-012). The old `method`/`url`/`archive`/`filename`/`app_id` fields are still written
-alongside the steps for one release, so a protocol 1 agent installs exactly as it did; that work
+alongside the steps, so a protocol 1 agent installs exactly as it did; that work
 took the negotiated protocol to 2 (ADR-014's N-1 window, which until then had no real history to
-mean anything against), and ADR-082's log viewer has since taken it to 3 the same additive way.
+mean anything against), and later additive bumps have since taken it to 7 — the log viewer
+(ADR-082), `ReclaimData` (ADR-088), managed config writes (ADR-092), cluster file operations
+(ADR-105), and the destroy confirmation (ADR-107).
 `internal/configfile` is the shared key-patching implementation behind both
 the `patch` step and a config file managed `patch`, so a key path means the same thing at
 install time and at provision time.
@@ -1230,9 +1253,10 @@ The seeds themselves live in `arasoi/yggdrasil-seeds` (ADR-081, ADR-087), which 
 authored, versioned and published, and where what each one covers is documented next to it. This
 document describes the *format* and the machinery; the catalog describes the games.
 
-That repository publishes **six seeds on `main` and seven on `develop`** at the time of writing —
-ARK Survival Ascended, Minecraft Java (Paper), Minecraft Bedrock, Valheim, Vintage Story and
-Palworld, with Empyrion still on the edge channel. They exercise both ends of ADR-018's install
+That repository publishes **seven seeds on `main` and eight on `develop`** at the time of writing —
+ARK Survival Ascended, Minecraft Java (Paper), Minecraft Bedrock, Valheim, Vintage Story,
+Palworld and Empyrion, with ARK Survival Evolved still on the edge channel. They exercise both
+ends of ADR-018's install
 model between them: a shared SteamCMD install mounted read-only with per-server writable overlays
 and cluster support at one end, and an image that installs the game itself with no install block
 at all at the other. Phase 5's exit criterion is stated against one of them and is tracked in the
@@ -1549,9 +1573,10 @@ entry fails at download with the working copy untouched.
 
 Trust is HTTPS plus the published `SHA256SUMS` (ADR-044's level, reused rather than
 reimplemented), not ADR-040's signing key: a seed is parsed and validated before it can replace
-anything, unlike an agent binary that executes with Docker-socket access on every node. The
-catalog is opt-in — `seed_channel` defaults to empty, and with it unset the page makes no
-outbound call at all, offering a channel picker instead that persists the choice to `yggd.yaml`.
+anything, unlike an agent binary that executes with Docker-socket access on every node.
+`seed_channel` defaults to `main` (ADR-087, since the catalog is the only way seeds arrive at
+all); setting it to empty is still respected and means no outbound call, with the page offering
+a channel picker instead that persists the choice to `yggd.yaml`.
 
 **Where it is read from is a setting**, `seeds.catalog_repo`, defaulting to the project's own
 catalog. That is the operator-added catalog path ADR-060 deferred, arriving as a repository name
@@ -1629,15 +1654,18 @@ seed-visible benefit. `base-java`/`base-dotnet` exist for the *next* JVM- or .NE
 which is the concrete case that prompted building them (ADR-047's own bar for adding to this
 library: build it when something needs it, not speculatively).
 
-`.github/workflows/images.yml` builds and publishes all five to GHCR
+`.github/workflows/images.yml` publishes all five to GHCR
 (`ghcr.io/<owner>/base-linux`, `.../base-steamcmd`, `.../base-steamcmd-proton`, `.../base-java`,
-`.../base-dotnet`) on every push to `develop`/`qa`/`main` that touches `images/**`, under the
-same floating per-branch channel tags (`develop-latest`/`qa-latest`/`release-latest`) the binary
-release workflow uses (ADR-038), plus an immutable `:<short-sha>` tag for anyone who wants to pin
-rather than track a channel. `base-steamcmd-proton` pins its own `BASE_IMAGE` build arg to the
-same-run `base-steamcmd` sha tag, for the identical reason `base-steamcmd` already pins
-`base-linux`'s; `base-java` and `base-dotnet` each pin `base-linux`'s sha tag directly, the same
-way `base-steamcmd` does.
+`.../base-dotnet`) under the same floating per-branch channel tags
+(`develop-latest`/`qa-latest`/`release-latest`) the binary release workflow uses (ADR-038), plus
+an immutable `:<short-sha>` tag for anyone who wants to pin rather than track a channel. A push
+to `develop`/`qa`/`main` rebuilds only the images it actually touched, plus everything downstream
+of them (ADR-093's amendment); a child pins its parent's same-run sha tag when the parent rebuilt
+in that run, and the parent's channel tag otherwise — with `cancel-in-progress` closing the
+window a floating tag could move in between. `base-linux`, `base-java` and `base-dotnet` are
+published as multi-arch (amd64 + arm64) manifest lists, each architecture built on its own
+native runner; `base-steamcmd` and `base-steamcmd-proton` are amd64-only and always will be —
+SteamCMD is a 32-bit x86 binary with no arm build, and GE-Proton is x86 Wine (ADR-094).
 
 ## Backups
 
@@ -1685,7 +1713,8 @@ A `Collector`, shaped exactly like `internal/control/scheduler`'s ticker, sample
 whose observed state is `running` or `degraded` once a minute through the same `hub.Hub.Stats`
 method the live panel already calls, and writes one row per container role into the
 `stats_samples` table — a bounded ring table (ADR-005's amendment on high-frequency telemetry)
-pruned back to a 7-day retention window on every tick. A server with nothing live to report is
+pruned back to the `stats.retention_days` setting (default 7 days, ADR-078) on every tick, so
+lowering it frees space within a minute. A server with nothing live to report is
 skipped rather than logged as a failure, the same judgment `stats.js`'s poller already makes
 for one missed live sample.
 
@@ -1740,8 +1769,8 @@ used key missing from the catalogue, an orphaned entry (what an edited English s
 behind), and a coverage ceiling that may only come down.
 
 **English is the only catalogue that ships.** The machinery is complete and exercised; what is
-absent is translated content, which nobody here can verify — and a machine translation of ~790
-strings would put unreviewable text on destructive actions. Because that leaves every
+absent is translated content, which nobody here can verify — and a machine translation of
+~950 strings would put unreviewable text on destructive actions. Because that leaves every
 language-selection path unexercised by construction, a test injects a second catalogue and drives
 a real request through `render()`, asserting it renders in that language, declares it, and falls
 back to English for a key it lacks.
@@ -1773,12 +1802,14 @@ are different states, and "give me the default back" is the first one.
 The table is key/value; what a key *means* lives in `internal/control/settings` as a registry
 of typed `Definition`s. So adding a setting is a Go declaration plus a consumer — no
 migration, no template edit, no new form field, because the page renders whatever the registry
-declares. Six ship, each with a live consumer: `log.level` (the process's own
+declares. Eight ship, each with a live consumer: `log.level` (the process's own
 `slog.LevelVar`, so debug can be switched on and off without a restart), `stats.retention_days`
 (read by `telemetry.Collector` on every prune, so lowering it frees space within a minute),
-`steam.api_key`, `seeds.catalog_repo` (where the Seeds page downloads from, ADR-081), and the
-pair that lets this control plane publish its own seeds — `seeds.publish_repo` and
-`seeds.publish_token` (ADR-079). That last one is the first credential here that writes somewhere
+`backups.retention_days` (read by the scheduler's archive prune the same way, ADR-088),
+`ui.language` (resolved per request, ADR-086), `steam.api_key`, `seeds.catalog_repo` (where the
+Seeds page downloads from, ADR-081), and the pair that lets this control plane publish its own
+seeds — `seeds.publish_repo` and `seeds.publish_token` (ADR-079). That last one is the first
+credential here that writes somewhere
 outside this deployment, which is why its target has no default and why the one repository it must
 never name is refused rather than merely discouraged. Its catalog sibling is the mirror image: a
 read is safe, so it has a default and every control plane gets the project's catalog without being
@@ -1906,7 +1937,7 @@ bar most of this table otherwise uses — actually proven to run Wine/Proton for
 createprefix` produces a genuine, fully-populated Wine prefix through the real container
 entrypoint (ADR-047's amendment has the full account, including two bugs — a wrong env var name
 and a root-vs-non-root permission error — that only surfaced by actually running it, not from
-reading the Dockerfile). The bundled `ark-survival-ascended` seed now points its primary
+reading the Dockerfile). The catalog's `ark-survival-ascended` seed points its primary
 container at `base-steamcmd-proton` directly (no separate `yggdrasil/ark-asa` image — nothing
 ARK-specific belongs baked into one) and invoked `umu-run` against ARK ASA's documented Windows
 binary path — the invocation that later moved behind `ygg-proton`, for the reasons the rest of
@@ -1991,11 +2022,12 @@ from the UI" above for the full sequence and ADR-040/ADR-041 for the design.
 
 **The N-1 half is closed too, and the criterion is met in full.** It could not have been when it
 was written: `Protocol == MinProtocol == 1`, so there was no older peer in existence to build,
-and the negotiation could only be exercised against constructed ranges. The protocol is 5 now
-with the floor still at 1, so four older peers genuinely exist — and `hack/n1-check.sh` builds
-one from each of the commits that shipped them (0.11.0 at protocol 1, 0.39.0 at 2, 0.40.1 at 3,
-0.44.0 at 4) and runs the whole criterion against them. Verified end to end on a real control
-plane with real Podman:
+and the negotiation could only be exercised against constructed ranges. The protocol is 7 now
+with the floor still at 1, so six older peers genuinely exist — `hack/n1-check.sh` walks
+`version.go`'s own history and builds one from each, so it does not go stale as the protocol
+moves. The verified run below was made at protocol 5, when four older peers existed (0.11.0 at
+protocol 1, 0.39.0 at 2, 0.40.1 at 3, 0.44.0 at 4), and ran the whole criterion against them —
+end to end on a real control plane with real Podman:
 
 - all four negotiate their own protocol against a protocol 5 control plane, not the newest, and
   all four are flagged as behind in the UI (ADR-014's own promise, which had never been checked
@@ -2043,8 +2075,8 @@ interval-based one reusing the manual backup path (ADR-045, "Scheduled backups" 
 the graphs as a bounded-ring-table collector and server-rendered SVG (ADR-046, "Resource
 graphs" above).
 
-Two limits are worth carrying forward rather than reading "Done" as covering them. Backups are
+One limit is worth carrying forward rather than reading "Done" as covering it. Backups are
 node-local: an archive never leaves the node it was taken on and a restore reads it back there,
-so there is no browser download and no off-node retention (ADR-042). And the network series on
-the resource graphs is a cumulative byte counter as the container runtime reports it, not a
-computed rate (ADR-046).
+so there is no browser download and no off-node retention (ADR-042). (The other limit this
+paragraph used to carry — the network series being a cumulative byte counter — was closed by
+ADR-075, which differences it into a per-second rate; see "Resource graphs" above.)
