@@ -805,6 +805,19 @@ control plane stores per `(server, name)` and shows on the server's page and its
 fleet list. Facts are discarded the moment a server stops: a Valheim join code from a previous
 run is not stale but *wrong*, and would send players to a session that no longer exists.
 
+**A line boundary is `\r` as well as `\n`, not `\n` alone** — found live, on a real SteamCMD
+install job whose reported progress never advanced past its first report. SteamCMD redraws its
+own progress line in place with a bare `\r` and prints no `\n` at all until it moves to the next
+state, so a scanner that only recognised `\n` never saw such a line as complete: `logscan.Scanner.Feed`
+held it as an ever-growing unterminated fragment (eventually dropped at `maxLineBytes`, never
+matched), and `internal/agent/install`'s own sibling line assembler for a SteamCMD install job's
+stdout — a second, independent implementation of the identical chunk-to-lines problem, since an
+install runs before any server exists for `logscan` to key by — held it forever with no bound at
+all. Both now treat a bare `\r` as closing the current line exactly as `\n` does, while still
+collapsing an ordinary CRLF pair into one line rather than two — including when the pair itself is
+split across two reads, which needs one bit of carried state (`afterCR`) to avoid either merging
+the next real line into the redrawn one or reporting a spurious empty line between them.
+
 **Readiness and crash detection are both log-driven where a seed asks for it**, each behind a
 declared mode with a safe default (ADR-077). Readiness is covered above. A `crash: {mode: log}`
 rule exists for the failure exit codes cannot see — ADR-047 records ARK hanging indefinitely
