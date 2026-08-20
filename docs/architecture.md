@@ -688,6 +688,19 @@ for the concurrency the agent's own credential swap introduces. See ADR-052.
 `starting` covers dependency-ordered sidecar startup and health gates before the primary is
 even launched. The agent watches the Docker event stream for exits rather than polling.
 
+**A stale exit event must be recognised, not applied** (ADR-114). Restart dispatches Stop
+immediately followed by Start with no wait between them (`server_lifecycle.go`, the same
+sequencing a reprovision uses for Stop immediately followed by Destroy) — but the container's own
+exit is reported on the runtime's independent async event stream, so a Start that relaunches the
+very same container (`ContainerStart` on an existing id, never a fresh one) can win the race
+against the Stop's own exit event still being delivered. Found live on two real ARK servers: both
+stayed genuinely running throughout a Restart while yggd reported them offline, "container exited
+with code 143" — the runtime container never stopped disagreeing with the FSM once it landed
+there, since nothing ever moved it again. `handleExit` now asks the runtime whether the role an
+exit event names is running *right now* before applying it, the same principle
+`console.runInstance` already uses to recognise a stale attachment (ADR-100) rather than enumerate
+every interleaving that could produce one.
+
 ## Data flow
 
 **Control operations** — browser → `yggd` HTTP API → hub → agent stream → Docker. The API
