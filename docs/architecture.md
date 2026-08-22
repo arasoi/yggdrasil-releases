@@ -1880,9 +1880,10 @@ Scope is a homelab: a small set of trusted people, not untrusted tenants.
   sign-in through Microsoft, Apple, or Discord (ADR-115). Federated login is strictly additive:
   the local account always keeps working, so a misconfigured or unreachable identity provider
   can never lock every operator out. A new account is never created just because someone can
-  authenticate to one of those providers — an admin must invite a specific email address first,
-  at `/users`, before that person's first sign-in can turn into an account. `api_tokens` remains
-  dead schema, unused since the first migration.
+  authenticate to one of those providers — an admin must first create a one-time join code at
+  `/users`, naming a role but not a person; whoever redeems that link, through whichever
+  provider they choose, is who the account belongs to (ADR-115's amendment). `api_tokens`
+  remains dead schema, unused since the first migration.
 - **RBAC** — three global, fleet-wide roles (`Viewer` < `Operator` < `Admin`), enforced by
   `requireRole` alongside the existing `requireAuth`. Admin covers settings, security, updates,
   node management, catalog/publish actions, and user management; Operator covers fleet mutation
