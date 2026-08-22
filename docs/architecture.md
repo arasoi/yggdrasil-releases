@@ -1874,11 +1874,22 @@ containing directory is already `0750`, which is why a `chmod` failure is non-fa
 
 ## Security model
 
-Scope is a homelab: a single trusted operator, not untrusted tenants.
+Scope is a homelab: a small set of trusted people, not untrusted tenants.
 
-- **Human auth** — single admin account, argon2id, session cookies. API tokens for scripting.
-  A `role` column exists from day one so adding RBAC later is not a painful migration, but no
-  RBAC logic exists in v1.
+- **Human auth** — a local admin account (argon2id, session cookies) plus optional federated
+  sign-in through Microsoft, Apple, or Discord (ADR-115). Federated login is strictly additive:
+  the local account always keeps working, so a misconfigured or unreachable identity provider
+  can never lock every operator out. A new account is never created just because someone can
+  authenticate to one of those providers — an admin must invite a specific email address first,
+  at `/users`, before that person's first sign-in can turn into an account. `api_tokens` remains
+  dead schema, unused since the first migration.
+- **RBAC** — three global, fleet-wide roles (`Viewer` < `Operator` < `Admin`), enforced by
+  `requireRole` alongside the existing `requireAuth`. Admin covers settings, security, updates,
+  node management, catalog/publish actions, and user management; Operator covers fleet mutation
+  (server and cluster lifecycle, files, console, backups) and anything that can reveal a secret
+  even as a plain read (a settings form's current values, a config file's contents); everything
+  else needs only an authenticated session. Scoping a role to specific servers or nodes rather
+  than the whole fleet is a deliberately reserved seam, not built.
 - **Perimeter** — the UI is reachable only over the LAN or through the Cloudflare tunnel,
   which provides external authentication. `yggd` never binds to a public interface.
 - **Agent auth** — mTLS with certificates from the control plane's internal CA, separate from
