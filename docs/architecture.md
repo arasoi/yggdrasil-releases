@@ -1837,6 +1837,15 @@ effect, so a value an operator put in the file is never silently overruled witho
 explanation. Clearing an override is a delete rather than a write of the empty string: those
 are different states, and "give me the default back" is the first one.
 
+**The page itself is a tab rail beside one panel per group, with a single search box over
+every setting** — the identical markup and script (`static/varform.js`) ADR-085 built for a
+seed's variables, reused unchanged rather than given a second implementation of the same shape.
+Sign-in's ten settings additionally sub-divide into per-provider boxes (Shared, Microsoft,
+Apple, Discord), decided in the web layer from each key's own prefix — a presentation grouping
+the registry itself knows nothing about (ADR-116). A setting an operator has actually set gets
+a small dot and a heavier label, so the page can be scanned for what is configured rather than
+read row by row.
+
 The table is key/value; what a key *means* lives in `internal/control/settings` as a registry
 of typed `Definition`s. So adding a setting is a Go declaration plus a consumer — no
 migration, no template edit, no new form field, because the page renders whatever the registry
