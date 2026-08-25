@@ -888,6 +888,19 @@ A server's own Overview and Console tabs, and this page's own per-server groups,
 through the same `playerCard`/`playerRow` template partials, so there is one row markup rather
 than three hand-copied ones.
 
+**The same page also carries a manual lookup** (ADR-120): a search box accepting a SteamID64, a
+`steamcommunity.com` profile or custom-URL link, or a bare custom URL name, independent of whether
+that person has ever been captured by a `join` rule at all. `internal/control/steam.ParseSteamIdentifier`
+decides which shape input is, `ResolveVanityURL` turns a custom name into a SteamID64, and the
+result is cross-referenced against the same fleet-wide online list the page already built, naming
+every server it finds a match on rather than picking one. Both Steam calls are cache-backed — the
+resolution through its own `steamVanityCache`, the profile fetch through the same `steamPlayerCache`
+ADR-119 already built — which is what makes it safe for the search to sit in the URL through an
+ordinary live-triggered re-render: nothing here differs from a server's own player card re-rendering
+on every fleet event, except that a search result's own "who's online now" answer only updates when
+the operator submits it again, the same one-shot-until-resubmitted contract `/installs`' state
+filter already uses.
+
 **Logs** (ADR-082) — a live view of `yggd`'s and `ygg-agent`'s own runtime output, not any
 game's. Server output already has a live-viewing mechanism above; the control plane and the
 agent's own process logs had none until this, so an operator debugging a node or the control
