@@ -805,6 +805,21 @@ is exactly the case an id-only check would miss. An unresolvable run reads as "d
 rather than "changed", so a daemon hiccup can never be the reason a live attachment is torn
 down.
 
+**A session can narrate before it has anything real to attach to** (ADR-118). Everything above
+covers a *started* server; before that — the pod network being created, an image checked or
+pulled, a container created, a health-gated dependency being waited on — nothing was shown at
+all, so an operator watching a server come up for the first time saw a blank terminal followed by
+an abrupt burst of the game's own boot log. `PodSpec.Narrate`, set by `ProvisionServer`'s handler
+before any container exists, calls `console.Manager.Narrate` at each of `runtime/docker`'s major
+Provision and Start steps; `Narrate` gets-or-creates a session marked `noteOnly` — the same
+lock-guarded path `attach` already serialises session creation through, not a second one — and
+appends a dim, ANSI-tagged line (`[boot] ...`) to its scrollback. A viewer's `Attach` arriving
+while a session is still `noteOnly` binds and replays without waiting on the real attach, which
+might be a health-gated dependency away; the real `Watch`, once the primary container actually
+exists, reuses the same session — narration and any bound viewer both carry over — and clears
+`noteOnly`. Nothing here is seed-authorable: it is infra-level and automatic for every seed, the
+same way the container-lifecycle events it narrates are.
+
 **A pending attach is still called off when the server stops** (ADR-098), and a destroy still
 closes a pod's sessions promptly (ADR-095). Neither is load-bearing now — the comparison above
 would catch the same thing at the next attach — but both free an attachment sooner than that.
@@ -887,8 +902,11 @@ neutralised before touching the filesystem, and a symlink is caught by resolving
 read, write, delete, mkdir, and rename are request/reply, correlated by command_id via the
 hub's `Call` rather than multiplexed by stream_id — a directory listing is a single bounded
 answer, not an ongoing session. The web UI is plain server-rendered forms: a listing with
-breadcrumbs, a textarea editor for files under 1 MiB, and an upload form, no JS framework
-needed (ADR-006).
+breadcrumbs, a Monaco editor for files under 1 MiB (vendored the same no-build-step way as the
+console's xterm.js, ADR-117), and an upload form, no JS framework needed (ADR-006). The
+`<textarea>` Monaco replaces is still what the surrounding form submits — Monaco is a view over
+it, not a different field — so the page works, just without highlighting, if the vendored script
+fails to load.
 
 A seed may put paths out of reach with `server.file_denylist`, for the files it regenerates itself:
 without it the browser invites an edit the next rebuild silently discards. It is not a security
