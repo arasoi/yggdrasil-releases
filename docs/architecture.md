@@ -865,6 +865,29 @@ nothing else: derived from what the game printed, discarded when the server stop
 reason its facts are, and depended on by nothing. The count is shown only for a seed that declares
 such a rule, since "0 players" on a server nobody is counting is a confident wrong answer.
 
+**A join rule may optionally also capture a Steam ID** (ADR-119), the same way it already
+captures the player's name — `join`'s one allowed optional field, since a `leave` is matched on
+name alone and would just discard one. Where present, `internal/control/steam.GetPlayerSummaries`
+resolves it to a cached persona name and avatar (`internal/control/web/steam_player_cache.go`, a
+24-hour TTL — long enough that routine page views never re-hit Steam, since this is read on every
+render rather than fired by an explicit operator action the way the seed-authoring UI's own
+1-hour Steam caches are) through `steam.api_key`, the same `KindSecret` setting the authoring UI's
+Steam lookups already use. `enrichPlayers` (`internal/control/web/players_enrich.go`) is where a
+raw `server_players` row becomes a `playerView` with an avatar; it is best-effort throughout — no
+key configured, or a failed lookup, degrades to the plain player list this feature always showed,
+never an error — and is called **once per page**, batching every steamid the page is about to show
+into a single lookup rather than one per server. This is still Steam only: Epic and Xbox both need
+per-title developer credentials this project does not have, and Xbox needs a separate auth chain
+from the OIDC sign-in ADR-115 already built. A live view only, too — no history beyond what
+`server_players` already held, and no kick/ban/control actions, just visibility.
+
+**`/players`** is the fleet-wide counterpart to a server's own player list: every online player,
+grouped by node and then cluster/standalone exactly like `/allocations` — the same bulk-load,
+build-lookup-maps, nest-and-sort shape, live via an unscoped `data-live="players-list"` region.
+A server's own Overview and Console tabs, and this page's own per-server groups, all render
+through the same `playerCard`/`playerRow` template partials, so there is one row markup rather
+than three hand-copied ones.
+
 **Logs** (ADR-082) — a live view of `yggd`'s and `ygg-agent`'s own runtime output, not any
 game's. Server output already has a live-viewing mechanism above; the control plane and the
 agent's own process logs had none until this, so an operator debugging a node or the control
