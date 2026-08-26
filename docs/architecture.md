@@ -898,6 +898,27 @@ looks right by inspection. The TTY fix stays: it addresses a genuinely different
 (SteamCMD's own libc buffering, upstream of anything the runtime's log collector does), and both
 are needed together now.
 
+**Both of those were real, and neither was the actual bug.** Found live a fourth time, with the
+tr fix deployed: progress still sat on its first report for a genuinely-confirmed-active
+multi-minute download. Rather than theorize about a fifth layer, `runSteamCMDOnce` was given a
+temporary diagnostic — every raw line `onLine` receives, logged whether or not it matched
+anything, visible on the node's own Logs page — and pointed at a real install. The result was
+decisive: `onLine` fires correctly, roughly every two seconds, with genuinely advancing byte
+counts (0 → 687 MB in 42 seconds, matching the download's real speed). The delivery mechanism —
+every fix above — works. What doesn't is `steamcmdProgress`'s own filter: SteamCMD's *first*
+progress line for a given phase arrives clean (`Update state (0x61) downloading, ...`), but every
+redraw after it is prefixed with an SGR reset the first one never had
+(`\x1b[0m Update state (0x61) downloading, ...`). `strings.TrimSpace` does not touch that prefix —
+ESC is not whitespace — so `strings.HasPrefix(line, "Update state")` matched line one and
+silently rejected every line after it, forever, which is exactly the "one report, then nothing"
+shape this bug has had every single time it was observed, including in installs from long before
+this session. Three real, separate fixes were needed to even get this far — a container without
+a TTY, a runtime that buffers by newline, and a filter blind to a four-byte prefix — and the
+first two were both genuinely necessary; neither would have surfaced this one on its own, since
+neither produces a *second* progress line to filter incorrectly. `steamcmdProgress` now strips
+one or more leading SGR sequences (`^(\x1b\[[0-9;]*m)+`) before matching, verified against the
+exact lines captured live rather than a constructed approximation.
+
 **Readiness and crash detection are both log-driven where a seed asks for it**, each behind a
 declared mode with a safe default (ADR-077). Readiness is covered above. A `crash: {mode: log}`
 rule exists for the failure exit codes cannot see — ADR-047 records ARK hanging indefinitely
