@@ -869,6 +869,35 @@ it with `stdcopy.StdCopy` regardless would corrupt the very first bytes read. `R
 `out` parameter was already one writer for both streams before this, so nothing about its contract
 changed, only how the bytes reach it.
 
+**Nor was the TTY fix the whole story — it fixed a real layer, but not the one actually holding
+progress back.** Found live, a third time, on the same seed: with the TTY fix deployed and a
+genuinely active download independently confirmed (real bytes landing on disk, not merely
+believed to be), the install job's reported progress sat on its very first report for over a
+minute. Reproduced locally against a real Docker daemon with a minimal container that does
+nothing but print `\r`-terminated text on a timer: `ContainerLogs`' own `Follow` stream holds a
+partial, non-newline-terminated write out of the stream entirely until either a real `\n` arrives
+or the container exits — and a TTY makes no difference to that, confirmed by reproducing the
+identical delay with `Tty: false`. That is a second, independent buffering layer neither the `\r`
+line-boundary fix nor the TTY fix touches: the *runtime's own log collector*, sitting between the
+container's stdout and anything `RunOnce`'s `out` writer ever gets to read. SteamCMD's `\r`-redrawn
+line has nothing else in the stream to close it as a complete log line until the state changes,
+however promptly SteamCMD itself flushes it out of its own buffer.
+
+The fix runs SteamCMD through a shell pipeline instead of execing it directly —
+`{ steamcmd ...; echo $? >file; } 2>&1 | tr '\r' '\n'; exit "$(cat file)"` — so every redraw becomes
+a genuine newline-terminated line before it ever reaches the runtime's log collector, at the cost
+of no longer being able to trust the container's own exit code: `tr` exits 0 once its input closes
+regardless of how the command feeding it failed, which would otherwise turn every SteamCMD failure
+into a silently reported success. The exit code is captured to a file inside the group and
+re-raised afterward instead, rather than reached for bash's `pipefail`, since `base-linux`'s
+`/bin/sh` is Debian's `dash` and does not have it. Building a shell string rather than an argv
+means every argument is shell-quoted (`shellQuote`, in `internal/agent/install`) to keep a
+seed-supplied value — a beta branch name, say — from being able to break out of its own argument;
+a real round-trip through `sh -c` is what the test for it asserts, not merely that the escaping
+looks right by inspection. The TTY fix stays: it addresses a genuinely different, real layer
+(SteamCMD's own libc buffering, upstream of anything the runtime's log collector does), and both
+are needed together now.
+
 **Readiness and crash detection are both log-driven where a seed asks for it**, each behind a
 declared mode with a safe default (ADR-077). Readiness is covered above. A `crash: {mode: log}`
 rule exists for the failure exit codes cannot see — ADR-047 records ARK hanging indefinitely
