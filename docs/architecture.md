@@ -846,6 +846,29 @@ collapsing an ordinary CRLF pair into one line rather than two — including whe
 split across two reads, which needs one bit of carried state (`afterCR`) to avoid either merging
 the next real line into the redrawn one or reporting a spurious empty line between them.
 
+**That fix was necessary and not sufficient.** Found live, again, on a real 7 Days to Die install:
+progress stuck on its very first report for minutes while the depot was genuinely still being
+written to disk — the same symptom the `\r` fix above was supposed to have closed. The `\r` fix
+makes a redrawn line *recognisable* once it arrives; it says nothing about *when* it arrives, and
+that turned out to be the actual remaining problem. `RunOnce` (`internal/agent/runtime/docker`)
+created its one-shot install container the same way every other container is created, with no
+TTY — correct for a real game server, whose engine writes its own log through its own explicit
+flushes, but wrong for a plain libc CLI tool like SteamCMD that never calls `fflush()` on its own
+redrawn line and instead relies on `isatty()` to decide how to buffer: line-buffered against a
+real terminal, fully block-buffered (glibc's own multi-KiB default) against anything else. Without
+a TTY, every "Update state ... downloading, progress: ..." redraw sat inside SteamCMD's own
+process-internal buffer — never reaching the container's stdout at all, and so never reaching
+Docker's log stream for `lineWriter` to even see — until either that buffer filled or the process
+exited. `RunOnce` now allocates a TTY, which is enough to make SteamCMD (or anything else in the
+same position) switch to its own interactive buffering the same way it would running by hand at a
+real prompt. The one other thing a TTY changes is how the container's log stream is framed: a
+non-TTY container's stdout and stderr are multiplexed with per-chunk headers so the daemon can tell
+them apart on the way out (`stdcopy.StdCopy`), while a TTY container's two streams already share
+one pty on the way in, so the log stream is the raw bytes with no framing to demultiplex — reading
+it with `stdcopy.StdCopy` regardless would corrupt the very first bytes read. `RunOnce`'s own
+`out` parameter was already one writer for both streams before this, so nothing about its contract
+changed, only how the bytes reach it.
+
 **Readiness and crash detection are both log-driven where a seed asks for it**, each behind a
 declared mode with a safe default (ADR-077). Readiness is covered above. A `crash: {mode: log}`
 rule exists for the failure exit codes cannot see — ADR-047 records ARK hanging indefinitely
