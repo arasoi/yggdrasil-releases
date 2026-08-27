@@ -1263,9 +1263,10 @@ control plane — so the agent still needs no access to a seed's variables or to
 channel (ADR-012). The old `method`/`url`/`archive`/`filename`/`app_id` fields are still written
 alongside the steps, so a protocol 1 agent installs exactly as it did; that work
 took the negotiated protocol to 2 (ADR-014's N-1 window, which until then had no real history to
-mean anything against), and later additive bumps have since taken it to 7 — the log viewer
+mean anything against), and later additive bumps have since taken it to 8 — the log viewer
 (ADR-082), `ReclaimData` (ADR-088), managed config writes (ADR-092), cluster file operations
-(ADR-105), and the destroy confirmation (ADR-107).
+(ADR-105), the destroy confirmation (ADR-107), and a per-step SteamCMD depot-bitness override
+(ADR-121).
 `internal/configfile` is the shared key-patching implementation behind both
 the `patch` step and a config file managed `patch`, so a key path means the same thing at
 install time and at provision time.
