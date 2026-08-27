@@ -1776,7 +1776,12 @@ generic base image library filling that gap:
   `tzdata`, and a properly generated `en_US.UTF-8` locale.
 - **`images/base-steamcmd`** — `FROM` `base-linux` (a `BASE_IMAGE` build arg, so a local build
   never needs a registry round trip), adding the `i386` architecture and 32-bit libraries
-  SteamCMD needs, plus SteamCMD itself, pre-warmed at build time.
+  SteamCMD needs, plus SteamCMD itself, pre-warmed at build time. Also installs
+  `libcurl3t64-gnutls`: some Steam-distributed dedicated servers' own binaries link against
+  curl's legacy GnuTLS-flavoured SONAME rather than the OpenSSL-flavoured build Debian installs
+  by default, found live when Team Fortress 2's `replay_srv.so` refused to load without it
+  (ADR-047's 2026-08-27 amendment) — the two builds share a SONAME but are ABI-incompatible, so
+  only installing the real package fixes it.
 - **`images/base-steamcmd-proton`** — `FROM` `base-steamcmd`, adding a pinned GE-Proton runtime
   and `umu-launcher` (ADR-047's amendment), for a Steam-distributed game whose dedicated server
   has no native Linux build at all and ships only a Windows binary. ARK Survival Ascended is the
