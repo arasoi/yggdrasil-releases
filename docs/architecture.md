@@ -1794,7 +1794,12 @@ generic base image library filling that gap:
   curl's legacy GnuTLS-flavoured SONAME rather than the OpenSSL-flavoured build Debian installs
   by default, found live when Team Fortress 2's `replay_srv.so` refused to load without it
   (ADR-047's 2026-08-27 amendment) — the two builds share a SONAME but are ABI-incompatible, so
-  only installing the real package fixes it.
+  only installing the real package fixes it. Its `entrypoint.sh` also stages SteamCMD's own
+  native `steamclient.so` into `$HOME/.steam/sdk<32|64>` unconditionally on every container
+  start, before the privilege-drop decision below — the generic, base-image form of a fix three
+  seeds (Garry's Mod, Team Fortress 2, Palworld) each needed by hand in their own launch
+  command, moved here per the project's own rule that container preparation belongs in the
+  image, never a seed's command line (docs/conventions.md).
 - **`images/base-steamcmd-proton`** — `FROM` `base-steamcmd`, adding a pinned GE-Proton runtime
   and `umu-launcher` (ADR-047's amendment), for a Steam-distributed game whose dedicated server
   has no native Linux build at all and ships only a Windows binary. ARK Survival Ascended is the
