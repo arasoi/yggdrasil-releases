@@ -820,6 +820,18 @@ exists, reuses the same session — narration and any bound viewer both carry ov
 `noteOnly`. Nothing here is seed-authorable: it is infra-level and automatic for every seed, the
 same way the container-lifecycle events it narrates are.
 
+**Only one call may ever claim a note-only session's real attach** (ADR-124). The Start path fires
+two `Watch` calls for the same server+role close enough together to matter: `startLogScan`, called
+directly after the Start command's own `supervisor.Start` returns, and `rewatchOnRestart`, called
+from the stream's state-change listener reacting to that same `Start`. Before ADR-124, both could
+see a session still `noteOnly`, both would decide they owned the transition to a real attach, and
+both would reach `runtime.Attach` and `close(sess.ready)` — the second close panics. `session`
+records the claim (`attaching`) under the same lock the `noteOnly` check itself runs, before the
+slow `runtime.Attach` call and well before `noteOnly` is actually cleared; a second call landing in
+that window now waits on `sess.ready` like an ordinary existing session instead of opening a second
+real attach of its own — the same single-opener guarantee ADR-100 already gives every other path
+into `attach`.
+
 **A pending attach is still called off when the server stops** (ADR-098), and a destroy still
 closes a pod's sessions promptly (ADR-095). Neither is load-bearing now — the comparison above
 would catch the same thing at the next attach — but both free an attachment sooner than that.
