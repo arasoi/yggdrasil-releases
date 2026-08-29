@@ -963,8 +963,7 @@ reason its facts are, and depended on by nothing. The count is shown only for a 
 such a rule, since "0 players" on a server nobody is counting is a confident wrong answer.
 
 **A join rule may optionally also capture a Steam ID** (ADR-119), the same way it already
-captures the player's name — `join`'s one allowed optional field, since a `leave` is matched on
-name alone and would just discard one. Where present, `internal/control/steam.GetPlayerSummaries`
+captures the player's name. Where present, `internal/control/steam.GetPlayerSummaries`
 resolves it to a cached persona name and avatar (`internal/control/web/steam_player_cache.go`, a
 24-hour TTL — long enough that routine page views never re-hit Steam, since this is read on every
 render rather than fired by an explicit operator action the way the seed-authoring UI's own
@@ -977,6 +976,16 @@ into a single lookup rather than one per server. This is still Steam only: Epic 
 per-title developer credentials this project does not have, and Xbox needs a separate auth chain
 from the OIDC sign-in ADR-115 already built. A live view only, too — no history beyond what
 `server_players` already held, and no kick/ban/control actions, just visibility.
+
+**A `leave` rule may correlate by a per-session id instead of a shared name** (ADR-127). Matching
+a leave against a join by `(server_id, player)` assumes the game prints the same name at both ends
+— true for most seeds, and false for Valheim's own PlayFab-era build, whose disconnect line
+(`Player connection lost server "...", now N player(s)`) carries no name at all. `join`'s optional
+`id` group (alongside `steamid`) captures a stable per-session identifier instead — Valheim's own
+ZDO owner number, present on the name-bearing join line and again on every disconnect-time cleanup
+line that follows a real leave — and a `leave` rule with no `player` of its own matches by that
+`id` instead. `leave` needs one of `player` or `id`, never neither; a seed that never declares
+`id` sees no behavior change; the mechanism is generic to any future game with the same split.
 
 **`/players`** is the fleet-wide counterpart to a server's own player list: every online player,
 grouped by node and then cluster/standalone exactly like `/allocations` — the same bulk-load,
