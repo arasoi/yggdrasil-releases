@@ -1799,7 +1799,7 @@ generic base image library filling that gap:
   start, before the privilege-drop decision below — the generic, base-image form of a fix three
   seeds (Garry's Mod, Team Fortress 2, Palworld) each needed by hand in their own launch
   command, moved here per the project's own rule that container preparation belongs in the
-  image, never a seed's command line (docs/conventions.md).
+  image, never a seed's command line (ADR-125).
 - **`images/base-steamcmd-proton`** — `FROM` `base-steamcmd`, adding a pinned GE-Proton runtime
   and `umu-launcher` (ADR-047's amendment), for a Steam-distributed game whose dedicated server
   has no native Linux build at all and ships only a Windows binary. ARK Survival Ascended is the
