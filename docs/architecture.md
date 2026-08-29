@@ -1381,6 +1381,17 @@ rendered per request rather than stored, because it templates over the node's ad
 change and can legitimately be unknown (ADR-065); with no address known it renders nothing at
 all, since a bare port reads as incomplete and a URI with an empty host does not.
 
+**A command can reach the node's address directly, with no port joined to it** (ADR-128).
+`TemplateData.NodeAddress` is the same address the connect block and every allocation's endpoint
+already resolve at render time (ADR-065) — `Endpoint` joins a port onto it, `NodeAddress` is the
+bare host, for a flag that needs one on its own rather than "host:port". ARK Survival Ascended is
+the first consumer: `-PublicIPForEpic={{.NodeAddress}}`, which tells Epic Online Services what
+address to hand a connecting client, wrapped in `{{if .NodeAddress}}...{{end}}` so it renders to
+nothing rather than an empty flag while the node's address is not known yet — degrading exactly
+as a connect block already does, not a second rule for the same ambiguity. Every render site that
+already builds `Endpoint` from a real node address builds `NodeAddress` from the same call, so the
+two can never name different hosts.
+
 **A seed can carry its own migrations.** Stored values are keyed by name, so renaming a variable
 silently discards what every operator chose — ADR-074 declined to rename Valheim's
 `crossplay_flag` for exactly that reason, since losing the stored value would have turned
