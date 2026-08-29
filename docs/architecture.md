@@ -178,6 +178,18 @@ dispatched once the install's node reconnects. An install genuinely reported fai
 agent — a real error, not an interruption — is never touched by self-heal at all, only by the
 **Retry** action on `/installs` and on a crashed server's own page, which carries no attempt cap.
 
+**An install job's completion provisions before it restarts anyone waiting on it** (ADR-126).
+`handleInstallProgress`'s success case does two things — reconcile (provision whatever needs it)
+and restart whoever ADR-106's `AddJobServerRestart` recorded — and the order between them matters
+whenever a Rebuild is what triggered the job: `reprovisionServer` destroys a server's pod *before*
+dispatching the install its new seed needs, so by the time the job succeeds that server can have
+zero containers. Restarting first sent a bare Start racing ahead of the Provision that would have
+created something for it to start, silently failing (`ErrPodNotFound`) and leaving the server
+`offline` with `Desired` stuck at `running` — permanently, since the reconcile that ran afterward
+made the server look already-settled to the next page load. Provisioning first closes the race:
+a server whose pod already exists (install-update, restore) sees no change, since provisioning is
+a no-op for it either way.
+
 ## Storage layout
 
 ```
