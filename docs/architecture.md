@@ -200,6 +200,26 @@ made the server look already-settled to the next page load. Provisioning first c
 a server whose pod already exists (install-update, restore) sees no change, since provisioning is
 a no-op for it either way.
 
+**A server left `Desired: running` survives a host reboot in the database, but nothing brought
+it back until now** (ADR-013, ADR-140). ADR-013 promised this from the day restart authority
+moved to the agent — "a host reboot brings servers back through ordinary desired-state
+reconciliation rather than a second, separate mechanism" — and no code path ever did it. Docker's
+restart policy is `no`, so a container stopped by anything other than the agent's own graceful
+path (a host reboot chief among them) stays stopped; a freshly-adopted agent assumes desired
+matches whatever it finds running (ADR-012), so nothing on either side ever asked the control
+plane to restart it. `Hub.applySnapshot` is the one point every server's `Observed` column for a
+reconnecting node holds its fresh, post-reconnect value at once, so `ReconcileRunState` runs
+there: for every server whose `Desired` is running and whose freshly-recorded `Observed` is
+`offline` or `crashed`, it dispatches the same Start an operator's own button click would.
+Deliberately narrower than the drift condition `serverView.Drifting()` already renders
+per-server — `installing`, `starting`, `stopping` and `degraded` are all excluded, since each
+already has its own owner (an install job, an in-flight command, or the agent's own crash-loop
+backoff for a sidecar) that an unconditional Start would race against rather than help. Wired the
+same way `RetryStuckInstalls` is (`hub.DesiredStateReconciler`, satisfied by `*web.Server`, set
+once from `cmd/yggd`): a hub with none simply does not reconcile run state, and a failure here is
+logged and left for an operator to retry by hand, since a server left down is still visible as
+drift on its own page.
+
 ## Storage layout
 
 ```
