@@ -2367,13 +2367,13 @@ from the UI" above for the full sequence and ADR-040/ADR-041 for the design.
 **The N-1 half is closed too, and the criterion is met in full.** It could not have been when it
 was written: `Protocol == MinProtocol == 1`, so there was no older peer in existence to build,
 and the negotiation could only be exercised against constructed ranges. As of this writing the
-protocol is `10` (`internal/shared/version.Protocol`) with the floor still at `1`, so nine older
+protocol is `11` (`internal/shared/version.Protocol`) with the floor still at `1`, so ten older
 peers genuinely exist — a count that only grows as the protocol does, which is exactly why
 `hack/n1-check.sh` reads `version.go` itself rather than a number written here: it walks the
 file's own history and builds a peer from every protocol between the floor and the current one,
-so the *script* cannot go stale as the protocol moves. This sentence can, and already has twice —
-read "the protocol is `10`" as accurate as of this edit, `version.go` as the actual source of
-truth, and `hack/n1-check.sh`'s own output as what to trust over either. The verified run below
+so the *script* cannot go stale as the protocol moves. This sentence can, and already has three
+times — read "the protocol is `11`" as accurate as of this edit, `version.go` as the actual source
+of truth, and `hack/n1-check.sh`'s own output as what to trust over either. The verified run below
 was made at protocol 5, when four older peers existed (0.11.0 at
 protocol 1, 0.39.0 at 2, 0.40.1 at 3, 0.44.0 at 4), and ran the whole criterion against them —
 end to end on a real control plane with real Podman:
