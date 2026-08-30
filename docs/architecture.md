@@ -188,6 +188,19 @@ dispatched once the install's node reconnects. An install genuinely reported fai
 agent — a real error, not an interruption — is never touched by self-heal at all, only by the
 **Retry** action on `/installs` and on a crashed server's own page, which carries no attempt cap.
 
+**An install `validate` calls healthy can still be wrong, and `/installs` offers a way out**
+(ADR-142). Retry and self-heal both lean on SteamCMD's own `app_update ... validate` reconciling
+a depot in place rather than re-fetching it (ADR-091), which is the right default and is not
+infallible — a depot corrupted in a way `validate` does not catch reads as fine forever. **Force
+clean** re-dispatches the same install with `InstallStart.force_clean` set, which tells
+`Installer.Install` to wipe the directory before running any step even for a method that would
+otherwise reconcile in place. Unlike Retry, it carries no state gate: it exists precisely for an
+install the state machine still calls `Ready`, and is refused only while a job is genuinely
+active on it. Deleting the install and letting it be recreated — ADR-091's own suggested
+escape hatch — was never actually reachable for this case, since `DeleteInstall` refuses
+unconditionally while any server still references it (ADR-018); Force clean is what that
+suggestion needed and did not have until now.
+
 **An install job's completion provisions before it restarts anyone waiting on it** (ADR-126).
 `handleInstallProgress`'s success case does two things — reconcile (provision whatever needs it)
 and restart whoever ADR-106's `AddJobServerRestart` recorded — and the order between them matters
