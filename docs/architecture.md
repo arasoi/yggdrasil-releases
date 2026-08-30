@@ -2032,12 +2032,25 @@ back to English for a key it lacks.
 One limit is carried forward rather than read as done. The ~150 template fragments that were
 sentences split by inline markup — each half a sentence that could not be translated alone — are
 done: `TH` carries a message with its markup, extraction is at zero untranslated fragments, and the
-coverage report that counted them down is a gate rather than a report. What remains is that
-**seed content is specified but not built** — a seed's own labels and descriptions are the
-majority of what an operator reads on a settings page, and ADR-086 records the design: per-language files inside the bundle
-(`<seed-id>/locales/<lang>.yaml`), keyed by the declared control name rather than by source text
-(a seed author may not write in English), with a stale entry as a lint warning rather than a load
-error and missing entries falling back to the seed's own text.
+coverage report that counted them down is a gate rather than a report.
+
+**Seed content is done too, not merely specified as this section once said.** A seed's own labels
+and descriptions are the majority of what an operator reads on a settings page, and ADR-086's
+design is built: `internal/seed/translate.go`'s `Locale` carries a seed's own name, description,
+group headings, control labels/descriptions/option text, container names and the connect label,
+one file per language at `<seed-id>/locales/<lang>.yaml`, keyed by the declared control or
+container name rather than by source text — a seed author may not write in English, so keying by
+source text would privilege the authored language the way the app's own catalogue does not need
+to. `LoadFS`/`LoadDir` attach it after `finalize`, so a locale keyed by a control the manifest does
+not declare is a lint warning (`lintLocales`) rather than a load failure, and a translation missing
+an entry falls back to the seed's own authored text — the identical "partial is usable, never
+blank" rule the app's own catalogue follows. `Seed.Localized` is applied wherever an operator
+actually reads a seed's prose — server settings, cluster settings, the seed-creation flow — rather
+than inside seed loading itself, so a caller that only needs the structure pays nothing.
+
+What is still missing is authoring, not the mechanism: neither the seed editor nor `ygg-seed` has
+any locale-aware tooling, so a translator hand-writes `locales/<lang>.yaml` directly into the
+bundle. That is a real gap, and the honest one to carry forward here in this document's place.
 
 ## Operator settings
 
