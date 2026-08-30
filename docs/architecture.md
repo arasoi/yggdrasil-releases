@@ -96,6 +96,16 @@ Seed  (data: how to install, run, and configure a game)
 
 **Node** — a host running an agent. Reports capacity, CPU architecture, kernel release,
 Docker version, and agent version, all at every handshake rather than once at enrollment.
+**Free disk is the exception, refreshed on every heartbeat** (ADR-134): unlike cores and memory it
+moves while the node is connected, and a figure only collected at handshake would describe the disk
+as it was when the agent last reconnected. `NodeCapacity` was already sent on every heartbeat and
+discarded on all of them, so this needed no new poller — the write it always should have done.
+A node below the configured threshold (`nodes.disk_low_percent`, default 10) is flagged on its own
+page, in the node list and on the fleet's node group; a node whose agent is too old to report free
+space reads as unknown rather than as full, since zero here is a real value and confusing the two
+would flag every such node. Nothing is refused or scheduled on it — an install that will not fit
+still fails the way it did, this only makes the reason visible, which matters because low disk
+surfaces from SteamCMD as an error naming neither the disk nor the space (ADR-089).
 May carry an operator-assigned port range (ADR-048); unset means every port on it allocates
 from the global default range instead. It also carries **where it can be reached** — the peer
 address observed when its agent last dialled in, plus an optional operator override for when
@@ -312,6 +322,15 @@ container to look at.
 `quit`, `exit`) rather than a signal, and losing that distinction corrupts world saves.
 `StopSpec` carries `{ConsoleCommand, Timeout, ThenSignal}`: write the command to the primary
 container's stdin, wait, escalate to SIGTERM, then SIGKILL.
+
+**The `StopSpec` rides on the stop command, exactly like the `PodSpec` above** (ADR-129), and the
+agent keeps no copy of it. That is not a detail: it was cached on the agent's own tracked server
+until this was fixed, populated there from `DefaultStopSpec()`, and the seed's real block — built
+correctly by the control plane and sent on the wire all along — was simply never read on arrival.
+So the console-command branch above never ran, for any seed, on any server, and every stop in the
+system was the bare SIGTERM fallback. A spec the control plane sends per command must not also
+have a home on the agent, or something will read the home instead of the message; the sharp edge
+is that the cached value was *plausible*, so the loss was silent rather than a crash.
 
 ## Pods
 
@@ -723,6 +742,18 @@ change event pushed to the browser over WebSocket.
 update) become Jobs. The agent streams progress up the control channel; the control plane
 persists job state and relays to any watching browser. A job survives the operator closing their tab and, where
 the underlying work permits, an agent reconnect (ADR-021).
+
+**A job that stopped servers to do its work restores their desired state when it fails, however
+the failure arrives** (ADR-129). Install-update and restore both stop every server they need out
+of the way, set `Desired` to stopped, and record a restart plan. A failure caught synchronously
+always put all of that back; a failure reported later by the agent — which is the ordinary case —
+did not, so servers stopped by a failed update sat at `Desired = stopped`, which is precisely what
+a deliberately stopped server looks like: no drift shown, no attention flag, and a subsequent
+Retry that builds its plan from `Desired == running` found nothing to restart, leaving them down
+even when it succeeded. Both paths now restore the intent. Whether the server is also *started*
+again is decided per job type rather than uniformly — install-update yes, a rebuild's own install
+no (its pod was destroyed before dispatch, ADR-126), a failed restore no (the disk may be
+half-written, and that is a worse thing to bring a game up on than nothing).
 
 **Live state** — `hub.EventHub`, the console hub's sibling, fans state changes out to every
 open browser tab so a page reflects what the fleet is doing without being reloaded (ADR-058).
