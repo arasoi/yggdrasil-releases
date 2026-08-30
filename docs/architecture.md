@@ -1058,6 +1058,27 @@ on every fleet event, except that a search result's own "who's online now" answe
 the operator submits it again, the same one-shot-until-resubmitted contract `/installs`' state
 filter already uses.
 
+**`/jobs`** is the fleet-wide list every long-running operation lacked until now (ADR-140's own
+finding, from the top-down review): install, install update, backup, restore, server move and
+agent update are all one `Job` (ADR-021), but each type's status used to be visible only on the
+page of whatever it targeted — an install's own row on `/installs`, a backup's own line on a
+server's Backups tab, an agent update's own row on `/updates` or `/nodes`. A server move never got
+a status display anywhere at all. `ListJobs` already returned every job fleet-wide, newest first,
+with nothing new needed in the store; the page is a flat table (deliberately not grouped by node
+the way `/allocations`/`/players` are, since an operator scanning "what's running or what just
+failed" cares about the target more than the node) with two independent server-side filters — type
+and state, `/installs`' own select-and-submit shape rather than `/seeds`' client-side chips, since
+stacking two chip rows for two independent dimensions is worse than two plain `<select>`s in one
+form. Capped to the most recent 200 past the filter, since jobs accumulate over the fleet's
+lifetime rather than with its size the way every other list page's row count does — a job's full
+history still lives on its own target's page via `ListJobsByTarget`. Live via the same unscoped
+`data-live="jobs-list"` region every other fleet list page uses (ADR-058), needing no new event
+kind since `EventJob` already existed with nothing rendering it fleet-wide. What a job acted on is
+resolved fresh per render rather than stored, tolerating a deleted target by falling back to its
+raw id rather than erroring the whole page — an agent-update job is the one special case, since its
+own `TargetType`/`TargetID` name the binary being installed rather than the node being updated,
+which travels as `NodeID` instead and is what an operator actually wants to see.
+
 **Logs** (ADR-082) — a live view of `yggd`'s and `ygg-agent`'s own runtime output, not any
 game's. Server output already has a live-viewing mechanism above; the control plane and the
 agent's own process logs had none until this, so an operator debugging a node or the control
