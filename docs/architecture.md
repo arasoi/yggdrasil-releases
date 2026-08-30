@@ -1190,7 +1190,9 @@ buttons rather than being the card element itself, since a `<form>` cannot nest 
 Restart is Stop immediately followed by Start with desired state held at running throughout — the
 same back-to-back sequencing a reprovision already uses for Stop immediately followed by Destroy —
 and a button disables itself when its node is disconnected rather than dispatching a command
-guaranteed to come back undelivered.
+guaranteed to come back undelivered. A server's own detail page carries the identical three
+buttons and, until ADR-138, was the one place that lacked the guard — fixed there by copying the
+card's own condition and rationale verbatim, leaving Kill and Delete ungated on both surfaces.
 
 **A cluster is one card, not one per member.** Its members are reached through it, at
 `/clusters/{id}` — the page ADR-066 built rename, remove-member and delete without, putting all
