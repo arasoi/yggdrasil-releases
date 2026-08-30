@@ -1260,6 +1260,22 @@ idle is muted, so a healthy fleet reads calm and only trouble draws the eye — 
 case the stylesheet is written for. Colour stays the only swappable axis (Frost / Grove /
 Ember), and semantic colour sits outside the palettes entirely.
 
+**A server stuck the wrong way round from what it was asked for now reads as needing attention,
+not as deliberately stopped** (ADR-143). `NeedsAttention()` used to check only `crashed` and
+`degraded`; `Desired` played no part in it, so a server a failed job left stopped was
+indistinguishable on the fleet page from one an operator stopped on purpose — ADR-130 named this
+gap directly and left it for its own change. `Stuck()` is deliberately narrower than the
+`Drifting()` predicate a server's own detail page already showed: `Installing`, `Starting` and
+`Stopping` all mean a job or a command already owns the next transition — a rebuild's own install
+leaves `Desired` at `running` throughout (ADR-062), so the raw `Drifting()` predicate would have
+flagged every ordinary rebuild as a problem for its whole duration. What is left after excluding
+those is exactly the two states nothing else owns fixing: `Desired=running`/`Observed=offline`
+(a failed job's own aftermath) and its mirror, a Stop that silently failed to take effect. A fleet
+card carries a small `should be {{.Desired}}` badge under the name for exactly this case, and it
+rolls into every existing "N needs attention" count — the page tile, a node group's summary, and a
+cluster's own worst-member colouring — with no other change, since all three already loop over
+`NeedsAttention()`.
+
 **A seed contributes one more colour, and only a hue.** `internal/control/branding.Accent`
 takes the dominant hue of a seed's own artwork and clamps lightness and chroma to fixed
 constants, so a game's colour can mark its own card's edge, its run bar and its page's active
