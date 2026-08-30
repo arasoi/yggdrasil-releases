@@ -1327,10 +1327,11 @@ control plane — so the agent still needs no access to a seed's variables or to
 channel (ADR-012). The old `method`/`url`/`archive`/`filename`/`app_id` fields are still written
 alongside the steps, so a protocol 1 agent installs exactly as it did; that work
 took the negotiated protocol to 2 (ADR-014's N-1 window, which until then had no real history to
-mean anything against), and later additive bumps have since taken it to 9 — the log viewer
+mean anything against), and later additive bumps have since taken it to 10 — the log viewer
 (ADR-082), `ReclaimData` (ADR-088), managed config writes (ADR-092), cluster file operations
 (ADR-105), the destroy confirmation (ADR-107), a per-step SteamCMD depot-bitness override
-(ADR-121), and a per-step SteamCMD depot-platform-OS override (ADR-123).
+(ADR-121), a per-step SteamCMD depot-platform-OS override (ADR-123), and a node's own free-disk
+figure on every heartbeat (ADR-134).
 `internal/configfile` is the shared key-patching implementation behind both
 the `patch` step and a config file managed `patch`, so a key path means the same thing at
 install time and at provision time.
@@ -2062,11 +2063,13 @@ read row by row.
 The table is key/value; what a key *means* lives in `internal/control/settings` as a registry
 of typed `Definition`s. So adding a setting is a Go declaration plus a consumer — no
 migration, no template edit, no new form field, because the page renders whatever the registry
-declares. Eight ship, each with a live consumer: `log.level` (the process's own
+declares. Nine ship, each with a live consumer: `log.level` (the process's own
 `slog.LevelVar`, so debug can be switched on and off without a restart), `stats.retention_days`
 (read by `telemetry.Collector` on every prune, so lowering it frees space within a minute),
 `backups.retention_days` (read by the scheduler's archive prune the same way, ADR-088),
-`ui.language` (resolved per request, ADR-086), `steam.api_key`, `seeds.catalog_repo` (where the
+`nodes.disk_low_percent` (read by every node page and the fleet's node groups through the one
+`Capacity.DiskLow` decision, ADR-134), `ui.language` (resolved per request, ADR-086),
+`steam.api_key`, `seeds.catalog_repo` (where the
 Seeds page downloads from, ADR-081), and the pair that lets this control plane publish its own
 seeds — `seeds.publish_repo` and `seeds.publish_token` (ADR-079). That last one is the first
 credential here that writes somewhere
@@ -2294,10 +2297,15 @@ from the UI" above for the full sequence and ADR-040/ADR-041 for the design.
 
 **The N-1 half is closed too, and the criterion is met in full.** It could not have been when it
 was written: `Protocol == MinProtocol == 1`, so there was no older peer in existence to build,
-and the negotiation could only be exercised against constructed ranges. The protocol is 7 now
-with the floor still at 1, so six older peers genuinely exist — `hack/n1-check.sh` walks
-`version.go`'s own history and builds one from each, so it does not go stale as the protocol
-moves. The verified run below was made at protocol 5, when four older peers existed (0.11.0 at
+and the negotiation could only be exercised against constructed ranges. As of this writing the
+protocol is `10` (`internal/shared/version.Protocol`) with the floor still at `1`, so nine older
+peers genuinely exist — a count that only grows as the protocol does, which is exactly why
+`hack/n1-check.sh` reads `version.go` itself rather than a number written here: it walks the
+file's own history and builds a peer from every protocol between the floor and the current one,
+so the *script* cannot go stale as the protocol moves. This sentence can, and already has twice —
+read "the protocol is `10`" as accurate as of this edit, `version.go` as the actual source of
+truth, and `hack/n1-check.sh`'s own output as what to trust over either. The verified run below
+was made at protocol 5, when four older peers existed (0.11.0 at
 protocol 1, 0.39.0 at 2, 0.40.1 at 3, 0.44.0 at 4), and ran the whole criterion against them —
 end to end on a real control plane with real Podman:
 
