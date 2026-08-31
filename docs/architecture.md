@@ -96,16 +96,16 @@ Seed  (data: how to install, run, and configure a game)
 
 **Node** — a host running an agent. Reports capacity, CPU architecture, kernel release,
 Docker version, and agent version, all at every handshake rather than once at enrollment.
-**Free disk is the exception, refreshed on every heartbeat** (ADR-134): unlike cores and memory it
-moves while the node is connected, and a figure only collected at handshake would describe the disk
-as it was when the agent last reconnected. `NodeCapacity` was already sent on every heartbeat and
-discarded on all of them, so this needed no new poller — the write it always should have done.
-A node below the configured threshold (`nodes.disk_low_percent`, default 10) is flagged on its own
-page, in the node list and on the fleet's node group; a node whose agent is too old to report free
-space reads as unknown rather than as full, since zero here is a real value and confusing the two
-would flag every such node. Nothing is refused or scheduled on it — an install that will not fit
-still fails the way it did, this only makes the reason visible, which matters because low disk
-surfaces from SteamCMD as an error naming neither the disk nor the space (ADR-089).
+**Free disk is the exception, refreshed on every heartbeat** (ADR-134), unlike cores and memory
+which only change at handshake — it moves while the node stays connected, and a figure only
+collected at handshake would describe stale state. `NodeCapacity` was already sent on every
+heartbeat and discarded on all of them, so this needed no new poller. A node below
+`nodes.disk_low_percent` (default 10) is flagged on its own page, the node list, and the fleet's
+node group; an agent too old to report free space reads as unknown rather than full, since the two
+must not be confused (conventions.md's node-capacity rules cover the unknown-vs-zero enforcement in
+full). Nothing is refused or scheduled on it — an install that will not fit still fails the way it
+did, this only makes the reason visible, which matters because low disk surfaces from SteamCMD as
+an error naming neither the disk nor the space (ADR-089).
 May carry an operator-assigned port range (ADR-048); unset means every port on it allocates
 from the global default range instead. It also carries **where it can be reached** — the peer
 address observed when its agent last dialled in, plus an optional operator override for when
@@ -131,25 +131,20 @@ allocated — always the next free port in the node's range, never the seed's de
 since a node's range is the operator's statement of which ports work on that host (ADR-061) —
 or derived from another port on the same container by a fixed offset, which Valheim's Steam
 query port, hardcoded to `game_port + 1` with no way to configure it separately, is what
-exists for (ADR-048). A base port and its offset siblings — including a same-number sibling on
-a different protocol, how a seed asks for one number on both TCP and UDP (Vintage Story) —
-allocate as one atomic group (`store.AllocatePortGroup`, ADR-083): a base candidate is accepted
-only once every sibling's derived number is confirmed free too, so a collision moves the whole
-group to the next candidate rather than stranding one member with the other already claimed.
-An offset must be zero or positive, so a derived port's number is never below its own base's —
-zero is the identity case a same-number sibling needs, and anything negative would put the
-"base" above its own "derived" port (ADR-109).
+exists for (ADR-048). A base port and its offset siblings — including a same-number sibling on a
+different protocol (Vintage Story's one number on both TCP and UDP) — allocate as one atomic group
+(`store.AllocatePortGroup`, ADR-083), so a collision retries the whole group rather than stranding
+one member with the other already claimed. An offset must be zero or positive, so a derived port's
+number is never below its own base's — zero is the identity case a same-number sibling needs, and
+anything negative would put the "base" above its own "derived" port (ADR-109). See conventions.md's
+ports-and-allocations rules for the mechanism.
 
 **A port number, once allocated, is claimed on every protocol, not only the one holding it**
-(ADR-109). Two servers cannot independently land on 25565 just because one asked for it on tcp
-and the other on udp, and neither can one server's own two ports. The **only** sanctioned
-exception is the same-number-sibling group the paragraph above already describes: a base and
-its offset-0 sibling are checked and inserted together in one atomic transaction, so neither
-sees the other as "in use" — nothing outside that one call ever gets the same courtesy. An
-operator's own pinned port is held to the same rule as a seed's declared default: it must sit
-inside the node's configured range, never reserved exactly outside it the way an offset-derived
-port's number legitimately can be, since the operator typed it themselves rather than having it
-dictated by the game.
+(ADR-109) — two servers cannot land on the same number just because one asked on tcp and the
+other on udp, and neither can one server's own two ports. The only exception is the
+atomically-inserted same-number sibling group above; an operator's own pinned port is held to the
+same node-range rule as a seed's declared default, since only an offset-derived port may
+legitimately sit outside it. See conventions.md's ports-and-allocations rules for the enforcement.
 
 **A node's port conflicts can be found and repaired from the Allocations page.** A conflict —
 a number two unrelated servers both ended up holding, which the rule above no longer permits a
@@ -177,16 +172,15 @@ wrong is silent: the server starts, logs nothing wrong, and refuses connections 
 **Job** — a long-running operation with streamed progress: install, install update, backup,
 restore, server move, agent update. One mechanism rather than six (ADR-021).
 
-**An install stuck by a control-plane restart self-heals**, up to a small bounded number of
-attempts, and stays repairable by hand past that (ADR-106). `ReconcileInterruptedInstalls`
-(ADR-021, ADR-101) still runs once at startup, but rather than marking an interrupted install
-`failed` outright, it leaves one with at least one server still waiting on it ready to retry —
-resuming is sound because SteamCMD's own `app_update ... validate` reconciles a partial download
-in place (ADR-091) rather than re-fetching from zero. Nothing is dispatched at that call site,
-since no node has connected yet at that point in `cmd/yggd`'s startup; the retry itself is
-dispatched once the install's node reconnects. An install genuinely reported failed by its
-agent — a real error, not an interruption — is never touched by self-heal at all, only by the
-**Retry** action on `/installs` and on a crashed server's own page, which carries no attempt cap.
+**An install stuck by a control-plane restart self-heals**, up to a bounded number of attempts,
+and stays repairable by hand past that (ADR-106). `ReconcileInterruptedInstalls` (ADR-021,
+ADR-101) leaves any install with at least one server still waiting on it ready to retry rather
+than marking it failed outright — resuming is sound because SteamCMD's own
+`app_update ... validate` reconciles a partial download in place (ADR-091). See conventions.md's
+install-lifecycle rules for how the retry cap works and how dispatch (on the install's node
+reconnecting, via `RetryStuckInstalls`) divides from this reconciliation. An install genuinely
+reported failed by its agent — a real error, not an interruption — is never touched by self-heal
+at all, only by the uncapped **Retry** action on `/installs` and on a crashed server's own page.
 
 **An install `validate` calls healthy can still be wrong, and `/installs` offers a way out**
 (ADR-142). Retry and self-heal both lean on SteamCMD's own `app_update ... validate` reconciling
@@ -202,16 +196,16 @@ unconditionally while any server still references it (ADR-018); Force clean is w
 suggestion needed and did not have until now.
 
 **An install job's completion provisions before it restarts anyone waiting on it** (ADR-126).
-`handleInstallProgress`'s success case does two things — reconcile (provision whatever needs it)
-and restart whoever ADR-106's `AddJobServerRestart` recorded — and the order between them matters
-whenever a Rebuild is what triggered the job: `reprovisionServer` destroys a server's pod *before*
-dispatching the install its new seed needs, so by the time the job succeeds that server can have
-zero containers. Restarting first sent a bare Start racing ahead of the Provision that would have
-created something for it to start, silently failing (`ErrPodNotFound`) and leaving the server
-`offline` with `Desired` stuck at `running` — permanently, since the reconcile that ran afterward
-made the server look already-settled to the next page load. Provisioning first closes the race:
-a server whose pod already exists (install-update, restore) sees no change, since provisioning is
-a no-op for it either way.
+`handleInstallProgress`'s success case reconciles (provisions whatever needs it) before restarting
+whoever ADR-106's `AddJobServerRestart` recorded — order that matters when a Rebuild triggered the
+job, since `reprovisionServer` destroys a server's pod *before* dispatching the install its new
+seed needs, leaving it with zero containers by the time the job succeeds. Restarting first sent a
+bare Start racing ahead of the Provision that would have created something to start, failing
+silently with `ErrPodNotFound` and leaving the server `offline` with `Desired` stuck at `running`
+**permanently** — the reconcile that ran afterward made it look already-settled to the next page
+load, so nothing else would have corrected it. Provisioning first closes the race. See
+conventions.md's job-lifecycle rules for the full incident account, including why the fix is a
+no-op for install-update and restore.
 
 **A server left `Desired: running` survives a host reboot in the database, but nothing brought
 it back until now** (ADR-013, ADR-140). ADR-013 promised this from the day restart authority
@@ -264,44 +258,33 @@ path is the general fallback that works for games offering nothing.
 **Installs are never backed up.** They are reproducible from the seed, and excluding
 them keeps backups proportional to actual game state rather than to disk footprint (ADR-023).
 
-**Every directory above has an owner that removes it** (ADR-088). Until then none of them did:
-`Runtime.Destroy` removes containers and the pod network and never a host directory, there was no
-route to delete an install at all, and nothing anywhere removed a backup archive — so a fleet with
-a scheduled backup (ADR-045) accumulated them for as long as it had been running.
+**Every directory has an owner that removes it** (ADR-088) — before this, none did, so a fleet
+with a scheduled backup (ADR-045) accumulated archives indefinitely and installs had no deletion
+route at all. One agent-side command, `ReclaimData`, frees a server directory, an install
+directory, or a backup archive, shaped like `DeleteClusterVolume` (ADR-066) since none of these
+sit inside the per-server file sandbox (ADR-033). Deleting a server frees its directory and its
+archives, a move frees the source node's copy, deleting an install frees its files once nothing
+references it, and the scheduler prunes archives past `backups.retention_days`.
 
-One agent-side command, `ReclaimData`, frees a server directory, an install directory or a backup
-archive. It is shaped exactly like `DeleteClusterVolume` (ADR-066) and for the same reason: the
-file sandbox is rooted at one *server's* directory (ADR-033) and none of these sit inside such a
-root, so it gets its own narrow message whose id is parsed as an id of the matching kind before it
-can name a path. Deleting a server frees its directory and its archives, a move frees the source
-node's copy, deleting an install frees its files once nothing references it, and the scheduler
-prunes archives past `backups.retention_days`.
+**Which install has an owner depends on whether it is shared** (ADR-096; conventions.md's
+ownership rule, backed by `resolveInstall`/`releaseInstall`, states the same distinction). A seed
+declaring `shared: false` gets a new install per server that nothing else can ever reference, so
+its lifetime is that server's and it is removed with it — on delete, on a move (the install does
+not travel, so the source's copy is immediately unreferenced), and on a failed creation. A
+*shared* install at refcount zero is deliberately kept as the cached depot the next server from
+that seed reuses, staying on `/installs` with its server count reading zero rather than being
+removed. The distinction was missed when the list above was drawn up, and a per-server install
+stranded 19 GB on every ordinary delete before it was added.
 
-**Which install has an owner depends on whether it is shared** (ADR-096). A seed declaring
-`shared: false` gets a new install per server that nothing else can ever reference, so its
-lifetime is that server's and it is removed with it — on delete, on a move (the install does not
-travel, so the source's copy is immediately unreferenced), and on a failed creation. A *shared*
-install at refcount zero is deliberately kept: it is the cached depot the next server from that
-seed reuses, and removing it would turn deleting one of five ARK maps into a 50 GB re-download.
-That one stays the operator's, on `/installs`, where its server count already reads zero. The
-distinction was missed when the list above was drawn up, and a per-server install stranded 19 GB
-on every ordinary delete.
-
-**Reclamation is best-effort and nothing depends on it.** A pre-protocol-4 agent ignores the
-command, so every caller logs a failure and carries on — refusing to delete a server because its
-disk could not be freed would leave an operator with a row they cannot remove. The cost is an
-orphaned directory an operator can still remove by hand.
-
-Ordering differs by path, deliberately. A server's archives are found by listing rows its own
-deletion then cascades away, so those are reclaimed *before* the row. An install's id and node are
-already known, and its row delete is what refuses while a server still references it — so there the
-row goes first, because reclaiming before a refusal wipes an install that is still mounted into
-running containers.
-
-An agent also sweeps runtime leftovers at startup, after adoption: an exited one-shot installer
-(ADR-057) and a pod network with nothing attached. Deliberately nothing else — it never removes a
-container merely because the control plane did not mention it, since ADR-031's reasoning about
-acting on incomplete information applies with full force to deletion.
+Reclamation is best-effort: a pre-protocol-4 agent ignores `ReclaimData`, so a caller logs the
+failure and still deletes the row rather than refusing — the cost is an orphaned directory an
+operator can still remove by hand. Ordering follows whichever check can still refuse: a server's
+archives are listed and reclaimed before the row that would cascade them away, while an install's
+row goes first, since reclaiming before a refused delete would wipe a still-mounted install. The
+agent's own startup sweep, run after adoption, is equally narrow — only an exited one-shot
+installer (ADR-057) and an unattached pod network, never a container the control plane simply
+didn't mention (ADR-031). See conventions.md's ownership-and-reclamation rules for the full
+statement.
 
 The block above is a node's layout, under the *agent's* `data_dir`. The *control plane's* own
 `data_dir` is a separate tree:
@@ -356,14 +339,11 @@ container to look at.
 `StopSpec` carries `{ConsoleCommand, Timeout, ThenSignal}`: write the command to the primary
 container's stdin, wait, escalate to SIGTERM, then SIGKILL.
 
-**The `StopSpec` rides on the stop command, exactly like the `PodSpec` above** (ADR-129), and the
-agent keeps no copy of it. That is not a detail: it was cached on the agent's own tracked server
-until this was fixed, populated there from `DefaultStopSpec()`, and the seed's real block — built
-correctly by the control plane and sent on the wire all along — was simply never read on arrival.
-So the console-command branch above never ran, for any seed, on any server, and every stop in the
-system was the bare SIGTERM fallback. A spec the control plane sends per command must not also
-have a home on the agent, or something will read the home instead of the message; the sharp edge
-is that the cached value was *plausible*, so the loss was silent rather than a crash.
+**The `StopSpec` rides on the stop command, exactly like the `PodSpec` above, and the agent keeps
+no copy of it** (ADR-129) — a cached copy here once silently overrode the real spec (populated
+from `runtime.DefaultStopSpec()`), so every seed's graceful-stop command went unused in favor of a
+bare SIGTERM until the cache was removed. See conventions.md's rule against caching what a
+per-command message already carries.
 
 ## Pods
 
@@ -500,6 +480,7 @@ Every container is labelled at creation:
 | `ygg.server.id` | Server UUID — the join key back to the control plane |
 | `ygg.node.id` | Guards against a misconfigured agent adopting foreign containers |
 | `ygg.pod.role` | `primary`, or the sidecar's role name |
+| `ygg.pod.primary` | Boolean; marks the primary container, read independently of `ygg.pod.role` at adoption |
 | `ygg.install.id` | Referenced install, if any |
 | `ygg.cluster.id` | Cluster membership, if any |
 | `ygg.seed.id` / `ygg.seed.version` | What produced this container |
@@ -752,18 +733,13 @@ for the concurrency the agent's own credential swap introduces. See ADR-052.
 `starting` covers dependency-ordered sidecar startup and health gates before the primary is
 even launched. The agent watches the Docker event stream for exits rather than polling.
 
-**A stale exit event must be recognised, not applied** (ADR-114). Restart dispatches Stop
-immediately followed by Start with no wait between them (`server_lifecycle.go`, the same
-sequencing a reprovision uses for Stop immediately followed by Destroy) — but the container's own
-exit is reported on the runtime's independent async event stream, so a Start that relaunches the
-very same container (`ContainerStart` on an existing id, never a fresh one) can win the race
-against the Stop's own exit event still being delivered. Found live on two real ARK servers: both
-stayed genuinely running throughout a Restart while yggd reported them offline, "container exited
-with code 143" — the runtime container never stopped disagreeing with the FSM once it landed
-there, since nothing ever moved it again. `handleExit` now asks the runtime whether the role an
-exit event names is running *right now* before applying it, the same principle
-`console.runInstance` already uses to recognise a stale attachment (ADR-100) rather than enumerate
-every interleaving that could produce one.
+**A stale exit event must be recognised, not applied** (ADR-114): a Restart's back-to-back
+Stop-then-Start (`server_lifecycle.go`) can relaunch the same container before the Stop's own exit
+event is delivered on the runtime's independent async event stream, so `handleExit` now checks
+whether the runtime says that role is running *right now* before acting on the event — the same
+principle `console.runInstance` uses for a stale attachment (ADR-100). Confirmed live on two real
+ARK servers that stayed genuinely running throughout a Restart while yggd reported them offline on
+a stale "exited with code 143".
 
 ## Data flow
 
@@ -856,30 +832,21 @@ during startup, long before an operator opens a console (ADR-067). A viewer arri
 reuses that same session rather than opening a second one, so this uses the property ADR-032
 already relies on rather than adding a second mechanism.
 
-**It attaches to every started server, not only the ones whose seeds declare a rule** (ADR-097).
-A container's opening burst is written once, and the daemon replays its log exactly once — when
-an attachment is opened — so a server nothing was reading kept its history only until the first
-viewer, and reached them through the *droppable* frames path rather than the blocking scrollback
-replay beside it. Watching from the start puts every server's history in the scrollback, where
-that blocking replay serves it, and stops the console's behaviour depending on a seed-authoring
-detail no operator can see. It costs one attachment per running server and nothing in the
-scanner, which returns immediately for a server with no rules.
+**It attaches to every started server, not only ones whose seeds declare a rule** (ADR-097) —
+otherwise a rule-less seed's history would survive only until the first viewer, since the daemon
+replays a container's opening burst exactly once. See conventions.md's "Reattaching console
+output across restarts" for the two-path (`pump` vs blocking `replay`) mechanism; the cost is one
+attachment per running server, cheap because the scanner itself still returns immediately for a
+seed with no rules.
 
-**A session is bound to the container run it attached to** (ADR-100). A session is keyed by
-server and role and reused across viewer churn, which is right until the container behind it is
-replaced — then it answers for a run that no longer exists and `Watch`, finding it, attaches to
-nothing at all. That was fixed three times in eight days, each fix enumerating one more event
-that ends a run: a destroyed pod (ADR-095), a crash-loop restart (ADR-097), then the four
-transitions *up* that replace nothing and must not close a live attachment (ADR-098).
-
-Enumeration is the wrong shape for it, so the run is measured instead. A session records the
-container id and start time it attached to, and `attach` compares that against the run holding
-that server and role now; different means stale, and the session is replaced by construction on
-whatever event caused it. Both halves of that identity matter — a reprovision gives a new
-container, while a crash-loop restart reuses the same one and only moves its start time, which
-is exactly the case an id-only check would miss. An unresolvable run reads as "do not know"
-rather than "changed", so a daemon hiccup can never be the reason a live attachment is torn
-down.
+**A console session is bound to the container run it attached to, not to the server and role
+alone** (ADR-100) — a session outliving the container it attached to answers for a run that no
+longer exists, and `Watch` finding it then attaches to nothing at all. That was fixed three times
+in eight days, each catching one more way a run ends: a destroyed pod (ADR-095), a crash-loop
+restart (ADR-097), then the four transitions *up* that replace nothing and must not close a live
+attachment (ADR-098). See conventions.md's "Reattaching console output across restarts" for the
+container-id-plus-start-time mechanism that replaced enumeration entirely, and why both halves of
+that identity matter.
 
 **A session can narrate before it has anything real to attach to** (ADR-118). Everything above
 covers a *started* server; before that — the pod network being created, an image checked or
@@ -921,110 +888,61 @@ control plane stores per `(server, name)` and shows on the server's page and its
 fleet list. Facts are discarded the moment a server stops: a Valheim join code from a previous
 run is not stale but *wrong*, and would send players to a session that no longer exists.
 
-**A line boundary is `\r` as well as `\n`, not `\n` alone** — found live, on a real SteamCMD
-install job whose reported progress never advanced past its first report. SteamCMD redraws its
-own progress line in place with a bare `\r` and prints no `\n` at all until it moves to the next
-state, so a scanner that only recognised `\n` never saw such a line as complete: `logscan.Scanner.Feed`
-held it as an ever-growing unterminated fragment (eventually dropped at `maxLineBytes`, never
-matched), and `internal/agent/install`'s own sibling line assembler for a SteamCMD install job's
-stdout — a second, independent implementation of the identical chunk-to-lines problem, since an
-install runs before any server exists for `logscan` to key by — held it forever with no bound at
-all. Both now treat a bare `\r` as closing the current line exactly as `\n` does, while still
-collapsing an ordinary CRLF pair into one line rather than two — including when the pair itself is
-split across two reads, which needs one bit of carried state (`afterCR`) to avoid either merging
-the next real line into the redrawn one or reporting a spurious empty line between them.
+SteamCMD's progress line needed four independent, layered fixes to reach the UI, each found live
+against a real install.
 
-**That fix was necessary and not sufficient.** Found live, again, on a real 7 Days to Die install:
-progress stuck on its very first report for minutes while the depot was genuinely still being
-written to disk — the same symptom the `\r` fix above was supposed to have closed. The `\r` fix
-makes a redrawn line *recognisable* once it arrives; it says nothing about *when* it arrives, and
-that turned out to be the actual remaining problem. `RunOnce` (`internal/agent/runtime/docker`)
-created its one-shot install container the same way every other container is created, with no
-TTY — correct for a real game server, whose engine writes its own log through its own explicit
-flushes, but wrong for a plain libc CLI tool like SteamCMD that never calls `fflush()` on its own
-redrawn line and instead relies on `isatty()` to decide how to buffer: line-buffered against a
-real terminal, fully block-buffered (glibc's own multi-KiB default) against anything else. Without
-a TTY, every "Update state ... downloading, progress: ..." redraw sat inside SteamCMD's own
-process-internal buffer — never reaching the container's stdout at all, and so never reaching
-Docker's log stream for `lineWriter` to even see — until either that buffer filled or the process
-exited. `RunOnce` now allocates a TTY, which is enough to make SteamCMD (or anything else in the
-same position) switch to its own interactive buffering the same way it would running by hand at a
-real prompt. The one other thing a TTY changes is how the container's log stream is framed: a
-non-TTY container's stdout and stderr are multiplexed with per-chunk headers so the daemon can tell
-them apart on the way out (`stdcopy.StdCopy`), while a TTY container's two streams already share
-one pty on the way in, so the log stream is the raw bytes with no framing to demultiplex — reading
-it with `stdcopy.StdCopy` regardless would corrupt the very first bytes read. `RunOnce`'s own
-`out` parameter was already one writer for both streams before this, so nothing about its contract
-changed, only how the bytes reach it.
+**A line boundary is `\r` as well as `\n`.** SteamCMD redraws its progress line in place with a
+bare `\r` and no `\n` until it moves to the next state. `logscan.Scanner.Feed` held such a line as
+an ever-growing unterminated fragment, eventually dropped at `maxLineBytes` and never matched;
+`internal/agent/install`'s own sibling line assembler for a SteamCMD install job's stdout — a
+second, independent implementation of the same chunk-to-lines problem, needed because an install
+runs before any server exists for `logscan` to key by — held it forever with no bound at all. Both
+now close a line on a bare `\r` exactly as `\n` does, tracking one bit of carried state (`afterCR`)
+so an ordinary CRLF pair split across two reads still collapses to one line rather than producing a
+spurious empty one.
 
-**Nor was the TTY fix the whole story — it fixed a real layer, but not the one actually holding
-progress back.** Found live, a third time, on the same seed: with the TTY fix deployed and a
-genuinely active download independently confirmed (real bytes landing on disk, not merely
-believed to be), the install job's reported progress sat on its very first report for over a
-minute. Reproduced locally against a real Docker daemon with a minimal container that does
-nothing but print `\r`-terminated text on a timer: `ContainerLogs`' own `Follow` stream holds a
-partial, non-newline-terminated write out of the stream entirely until either a real `\n` arrives
-or the container exits — and a TTY makes no difference to that, confirmed by reproducing the
-identical delay with `Tty: false`. That is a second, independent buffering layer neither the `\r`
-line-boundary fix nor the TTY fix touches: the *runtime's own log collector*, sitting between the
-container's stdout and anything `RunOnce`'s `out` writer ever gets to read. SteamCMD's `\r`-redrawn
-line has nothing else in the stream to close it as a complete log line until the state changes,
-however promptly SteamCMD itself flushes it out of its own buffer.
+**Recognising a redrawn line is not the same as receiving it.** `RunOnce`
+(`internal/agent/runtime/docker`) created the install container with no TTY, and SteamCMD decides
+its buffering via `isatty()`: line-buffered against a real terminal, fully block-buffered (glibc's
+multi-KiB default) against anything else — so a redrawn progress line sat inside SteamCMD's own
+process buffer, never reaching the container's stdout at all, until the buffer filled or the
+process exited. `RunOnce` now allocates a TTY. That also changes how the container's log stream is
+framed: a non-TTY container's stdout/stderr are multiplexed with per-chunk headers (`stdcopy.StdCopy`)
+so the daemon can tell them apart, while a TTY container's two streams already share one pty with
+no such framing — reading a TTY stream with `stdcopy.StdCopy` regardless would corrupt the first
+bytes read.
 
-The fix runs SteamCMD through a shell pipeline instead of execing it directly —
+**Even with a TTY, Docker's own `ContainerLogs` follow stream independently withholds a partial,
+non-newline-terminated write until a real `\n` arrives or the container exits** — a second,
+independent buffering layer in the runtime's own log collector, upstream of anything `RunOnce`'s
+`out` writer reads. The fix runs SteamCMD through a shell pipeline rather than execing it directly —
 `{ steamcmd ...; echo $? >file; } 2>&1 | tr '\r' '\n'; exit "$(cat file)"` — so every redraw becomes
-a genuine newline-terminated line before it ever reaches the runtime's log collector, at the cost
-of no longer being able to trust the container's own exit code: `tr` exits 0 once its input closes
-regardless of how the command feeding it failed, which would otherwise turn every SteamCMD failure
-into a silently reported success. The exit code is captured to a file inside the group and
-re-raised afterward instead, rather than reached for bash's `pipefail`, since `base-linux`'s
-`/bin/sh` is Debian's `dash` and does not have it. Building a shell string rather than an argv
-means every argument is shell-quoted (`shellQuote`, in `internal/agent/install`) to keep a
-seed-supplied value — a beta branch name, say — from being able to break out of its own argument;
-a real round-trip through `sh -c` is what the test for it asserts, not merely that the escaping
-looks right by inspection. The TTY fix stays: it addresses a genuinely different, real layer
-(SteamCMD's own libc buffering, upstream of anything the runtime's log collector does), and both
-are needed together now.
+a real newline-terminated line before it reaches the log collector. Since `tr` itself always exits
+0, the real exit code is captured to a file inside the group and re-raised afterward rather than
+relying on bash's `pipefail`, which `base-linux`'s `/bin/sh` (Debian's `dash`) does not have.
+Building a shell string rather than an argv means every argument is shell-quoted (`shellQuote`, in
+`internal/agent/install`) so a seed-supplied value cannot break out of its own argument — asserted
+by a real round-trip through `sh -c`, not just by inspection of the escaping.
 
-**Both of those were real, and neither was the actual bug.** Found live a fourth time, with the
-tr fix deployed: progress still sat on its first report for a genuinely-confirmed-active
-multi-minute download. Rather than theorize about a fifth layer, `runSteamCMDOnce` was given a
-temporary diagnostic — every raw line `onLine` receives, logged whether or not it matched
-anything, visible on the node's own Logs page — and pointed at a real install. The result was
-decisive: `onLine` fires correctly, roughly every two seconds, with genuinely advancing byte
-counts (0 → 687 MB in 42 seconds, matching the download's real speed). The delivery mechanism —
-every fix above — works. What doesn't is `steamcmdProgress`'s own filter: SteamCMD's *first*
-progress line for a given phase arrives clean (`Update state (0x61) downloading, ...`), but every
-redraw after it is prefixed with an SGR reset the first one never had
-(`\x1b[0m Update state (0x61) downloading, ...`). `strings.TrimSpace` does not touch that prefix —
-ESC is not whitespace — so `strings.HasPrefix(line, "Update state")` matched line one and
-silently rejected every line after it, forever, which is exactly the "one report, then nothing"
-shape this bug has had every single time it was observed, including in installs from long before
-this session. Three real, separate fixes were needed to even get this far — a container without
-a TTY, a runtime that buffers by newline, and a filter blind to a four-byte prefix — and the
-first two were both genuinely necessary; neither would have surfaced this one on its own, since
-neither produces a *second* progress line to filter incorrectly. `steamcmdProgress` now strips
-one or more leading SGR sequences (`^(\x1b\[[0-9;]*m)+`) before matching, verified against the
-exact lines captured live rather than a constructed approximation.
+**The delivery mechanism above works; the filter reading it did not.** SteamCMD's first progress
+line for a phase arrives clean (`Update state (0x61) downloading, ...`), but every redraw after it
+carries a leading SGR reset the first line never had (`\x1b[0m Update state ...`) — invisible to
+`strings.TrimSpace` (ESC is not whitespace), so `strings.HasPrefix(line, "Update state")` matched
+line one and silently rejected every line after it, forever. `steamcmdProgress` now strips one or
+more leading SGR sequences (`^(\x1b\[[0-9;]*m)+`) before matching, verified against lines captured
+live.
 
-**Readiness and crash detection are both log-driven where a seed asks for it**, each behind a
-declared mode with a safe default (ADR-077). Readiness is covered above. A `crash: {mode: log}`
-rule exists for the failure exit codes cannot see — ADR-047 records ARK hanging indefinitely
-inside Crashpad with the process alive and nothing exiting — and a match **kills the pod**, so the
-ordinary exit path does the transition and the restart with the matched line as the reason. One
-route to crashed, not two; marking a server crashed while its containers run would be a state the
-restart policy could not act on. The signal goes to the supervisor rather than being turned into a
-state change by whatever read the line, because whether a line means anything depends on what the
-server is doing: a shutdown message during a deliberate stop is not a crash. `mode: none` is the
-default, and the bar for adopting a pattern is higher than readiness's — a wrong readiness pattern
-delays a server, a wrong crash pattern stops a healthy one, which is why neither bundled seed that
-once carried a candidate still declares it as a field.
+**Readiness and crash detection are both log-driven where a seed asks for it** (ADR-077). A
+`crash: {mode: log}` rule exists for a failure exit codes cannot see — ARK hanging indefinitely
+inside Crashpad with the process alive and nothing exiting (ADR-047) — and a match kills the pod,
+so the ordinary exit-and-restart path handles it as the single route to `crashed`. `mode: none` is
+the default. See conventions.md's "Player lists and crash detection" section for the safety
+mechanics and why a crash pattern's bar is higher than a readiness one.
 
 **A seed can also recognise well-known events** — `logs.events`, `join` and `leave` — which
-maintain a player list on the server's page and a count on the fleet list. Observed state and
-nothing else: derived from what the game printed, discarded when the server stops for the same
-reason its facts are, and depended on by nothing. The count is shown only for a seed that declares
-such a rule, since "0 players" on a server nobody is counting is a confident wrong answer.
+maintain a player list on the server's page and a count on the fleet list (observed state only;
+see the "Player lists and crash detection" section of `docs/conventions.md` for why it is
+discarded on stop and shown only when a seed declares the rule).
 
 **A join rule may optionally also capture a Steam ID** (ADR-119), the same way it already
 captures the player's name. Where present, `internal/control/steam.GetPlayerSummaries`
@@ -1135,11 +1053,10 @@ console's xterm.js, ADR-117), and an upload form, no JS framework needed (ADR-00
 it, not a different field — so the page works, just without highlighting, if the vendored script
 fails to load.
 
-A seed may put paths out of reach with `server.file_denylist`, for the files it regenerates itself:
-without it the browser invites an edit the next rebuild silently discards. It is not a security
-boundary — the sandbox is, and containment is unconditional — so a denied entry is omitted from a
-listing rather than shown and refused, and it is enforced on the agent as well as hidden in the UI
-because a node must not depend on the thing sending it commands being correct.
+A seed may put paths out of reach with `server.file_denylist`, for the files it regenerates
+itself — see conventions.md's "Files and sandboxing" for what it does and does not guard (it is
+not the security boundary; the sandbox is) and why a denied entry is omitted rather than refused
+(ADR-033, ADR-092).
 
 A seed may also mark a config file `importable`, which lets an operator read it back off the node
 and adopt the values the seed recognises onto that server's stored settings — the migration path
@@ -1147,14 +1064,12 @@ for a server somebody configured by hand, or a file edited before the seed had a
 key. Only values that differ are adopted, and a file that could not be read whole contributes
 nothing, which is the same judgement patching makes in the other direction.
 
-**A cluster's shared volume gets the same six operations**, at `/clusters/{id}/files`
-(ADR-105). It cannot reuse a server's sandbox — that is rooted per server (ADR-033) and a
-cluster volume sits outside every such root by design, the same reason `DeleteClusterVolume`
-(ADR-066) already needed its own command — so the six wire messages carry an alternate
-`cluster_id` alongside `server_id`, mutually exclusive, and one agent-side dispatcher
-(`filesRoot`) resolves whichever root the request actually names. No `file_denylist` applies
-there: that is a seed's own declaration about one server's writable paths, and a cluster's
-shared volume has no seed of its own to declare one over it.
+**A cluster's shared volume gets the same six file operations**, at `/clusters/{id}/files` — the
+existing wire messages widened with an alternate `cluster_id` field, mutually exclusive with
+`server_id`, rather than a second set of them, since a cluster volume sits outside any server's
+own sandbox root (ADR-033) — the same reason `DeleteClusterVolume` needed its own command
+(ADR-066, ADR-105). See conventions.md for the dispatch mechanism and why no `file_denylist`
+applies there.
 
 **Bulk data** is always proxied through the control plane; direct browser-to-agent transfer
 was considered and rejected (ADR-011). Uploads and downloads go through the same JSON-free
@@ -1184,18 +1099,13 @@ and every writable path is a bind mount from the server's own directory. A port 
 blank takes the next free port in the node's range; a derived port is shown but not editable.
 
 **A seed's controls are tabbed once there are enough of them, and the page is searchable**
-(ADR-085). A block of four or more groups renders as a vertical tab rail beside one panel per
-group — Vintage Story's 136 controls in 18 groups are 3.2 screens of headings as a stack and 1.3
-screens as tabs — and the seed's `collapsed` declaration decides which tab opens rather than
-whether a fieldset starts shut. Above them sits **one** filter for the whole page, matching a
-control's name, label, description or group: the variable/setting split is the seed author's and
-not the operator's, who knows the name of what they are looking for and not which block declared
-it. Every panel stays in the form whichever tab is showing, since a setting that failed to submit
-would read as *absent* — a third state meaning "leave the game's own config alone" — rather than
-as unchanged. A field a `show_if` rule hides is never surfaced by a match, and a control the
-browser refuses to submit has its tab and the filter cleared before the browser reports it, since
-constraint validation runs on hidden controls and would otherwise block Save with nothing on
-screen to point at.
+(ADR-085) — a vertical tab rail beside one panel per group once a seed declares four or more
+(Vintage Story's 136 controls across 18 groups is the case that motivated it: 3.2 screens of
+headings as a stack versus 1.3 screens as tabs), with a single filter spanning variables and
+settings, since an operator recognizes a control's name rather than which block declared it.
+Every panel stays in the form regardless of which tab is showing, so a hidden control still
+submits — conventions.md's Grouped-controls and Filtering-controls rows cover the tab threshold,
+the `show_if`/validation interaction, and why a hidden panel must never be dropped.
 
 **Moving a server to another node** is its own action on that page, and a Job rather than an
 edit (ADR-063). The source node archives the server's writable state and uploads it; the
@@ -1230,35 +1140,37 @@ of the list, which put a form nobody was filling in below every server they were
 See ADR-054's amendment.
 
 **Each group is a grid of art cards** (ADR-080): a seed's own banner, its state as a chip on the
-artwork, its facts and its player count. Every entry is a card, and how many fill a row is the
-grid's decision rather than a constant — one column at 420px, three at 1440, seven at 2560 —
-because the number that fills a row depends on the viewport and the control plane cannot know
-it. The band is height-capped so a wide card does not become mostly artwork. This is what
-finally consumes the artwork ADR-077 and ADR-079 built the whole path for; before it, a banner
-appeared on exactly one page as a 120px inline image. Most seeds ship none, so the card falls
-back to a striped placeholder carrying the seed's own glyph, and that is the path built first.
+artwork, its facts and its player count. How many fill a row is the grid's decision rather than a
+constant — one column at 420px, three at 1440, seven at 2560 — because the count depends on the
+viewport and the control plane cannot know it (conventions.md's Art-cards row has the
+auto-fill/max-height mechanics). The band is height-capped so a wide card does not become mostly
+artwork. This is what finally consumes the artwork ADR-077 and ADR-079 built the whole path for;
+before it, a banner appeared on exactly one page as a 120px inline image. Most seeds ship none, so
+the card falls back to a striped placeholder carrying the seed's own glyph, and that is the path
+built first.
 
 **A card carries its own start/restart/stop, not only a link to the server's page** (ADR-084's
-amendment). The whole-card-is-the-link property survives as a stretched `<a>` layered under the
-buttons rather than being the card element itself, since a `<form>` cannot nest inside an `<a>`.
-Restart is Stop immediately followed by Start with desired state held at running throughout — the
-same back-to-back sequencing a reprovision already uses for Stop immediately followed by Destroy —
-and a button disables itself when its node is disconnected rather than dispatching a command
-guaranteed to come back undelivered. A server's own detail page carries the identical three
-buttons and, until ADR-138, was the one place that lacked the guard — fixed there by copying the
-card's own condition and rationale verbatim, leaving Kill and Delete ungated on both surfaces.
+amendment — conventions.md's Art-cards row explains why the stretched-anchor layering was
+needed). Restart is Stop immediately followed by Start with desired state held at running
+throughout — the same back-to-back sequencing a reprovision already uses for Stop immediately
+followed by Destroy — and a button disables itself when its node is disconnected rather than
+dispatching a command guaranteed to come back undelivered. A server's own detail page carries the
+identical three buttons and, until ADR-138, was the one place that lacked the guard — fixed there
+by copying the card's own condition and rationale verbatim, leaving Kill and Delete ungated on
+both surfaces.
 
 **A cluster is one card, not one per member.** Its members are reached through it, at
 `/clusters/{id}` — the page ADR-066 built rename, remove-member and delete without, putting all
 three in a table cell because there was nowhere else. Its card carries a stacked-sheet edge, a
 segmented run bar with one segment per member, and aggregate counts.
 
-Run state is carried by colour as well as text: a badge plus a stripe on the row's leading
-edge, both chosen by one Go method so nothing can disagree about what state a server is in.
-`degraded` is coloured apart from `crashed`, since ADR-019 makes them operationally distinct;
-idle is muted, so a healthy fleet reads calm and only trouble draws the eye — the wall-mounted
-case the stylesheet is written for. Colour stays the only swappable axis (Frost / Grove /
-Ember), and semantic colour sits outside the palettes entirely.
+Run state is carried by colour as well as text — a badge plus a stripe on the row's leading edge,
+both chosen by one Go method so nothing can disagree about what state a server is in
+(conventions.md's State and Colour rows carry the mechanics). `degraded` is coloured apart from
+`crashed`, since ADR-019 makes them operationally distinct; idle is muted, so a healthy fleet
+reads calm and only trouble draws the eye — the wall-mounted case the stylesheet is written for.
+Colour stays the only swappable axis (Frost / Grove / Ember), and semantic colour sits outside the
+palettes entirely.
 
 **A server stuck the wrong way round from what it was asked for now reads as needing attention,
 not as deliberately stopped** (ADR-143). `NeedsAttention()` used to check only `crashed` and
@@ -1276,26 +1188,24 @@ rolls into every existing "N needs attention" count — the page tile, a node gr
 cluster's own worst-member colouring — with no other change, since all three already loop over
 `NeedsAttention()`.
 
-**A seed contributes one more colour, and only a hue.** `internal/control/branding.Accent`
-takes the dominant hue of a seed's own artwork and clamps lightness and chroma to fixed
-constants, so a game's colour can mark its own card's edge, its run bar and its page's active
-tab without ever competing with the product accent or with semantic state colour. It is
-**derived, never stored**: the bytes already answer it, and a persisted copy would be a second
-writer able to drift from the image beside it (ADR-071). Memoised per seed, forgotten on
-reload, and empty for a seed with no artwork or no usable hue — which the stylesheet's own
-`--game: var(--accent)` default covers with no branch in any template. `branding.accent`, the
-field a seed *declares*, stays reserved and applied by nothing (ADR-077 §14).
+**A seed contributes one more colour, and only a hue.** `internal/control/branding.Accent` takes
+the dominant hue of a seed's own artwork and clamps lightness and chroma to fixed constants, so a
+game's colour can touch the chrome — conventions.md's Game-accent row names exactly where (an
+edge, a run bar, an active tab underline) — without ever competing with the product accent or
+with semantic state colour. It is **derived, never stored**: the bytes already answer it, and a
+persisted copy would be a second writer able to drift from the image beside it (ADR-071).
+Memoised per seed, forgotten on reload, and empty for a seed with no artwork or no usable hue —
+which the stylesheet's own `--game: var(--accent)` default covers with no branch in any template.
+`branding.accent`, the field a seed *declares*, stays reserved and applied by nothing (ADR-077 §14).
 
 **A server's and a cluster's page open with an art band**: the same banner, blurred on a layer
 of its own behind a fixed scrim, with the tab strip at the top and the identity block, endpoints
-and lifecycle controls on it. The scrim is never tuned per seed — a seed can ship any artwork,
-and the contrast guarantee has to hold for all of them.
+and lifecycle controls on it.
 
 **Headline numbers are stat tiles** rather than a line of body text: the fleet's counts, and the
-live CPU/memory/network readings on a server and in the console's rail. The live fragment
-carries its own grid, since `stats.js` replaces that element's contents wholesale and a grid
-declared outside it would not survive the swap; it auto-fits, so one piece of markup is a row on
-one page and a stack on the other.
+live CPU/memory/network readings on a server and in the console's rail — the same markup reads
+as a row on one page and a stack on the other (conventions.md's Stat-tiles row has the grid/swap
+mechanics).
 
 **Those badges, stripes, cards and counts move on their own.** State changes are pushed to every open
 tab and the page re-reads itself (ADR-058, "Live state" above) — which is what makes the
@@ -1399,49 +1309,42 @@ control plane — so the agent still needs no access to a seed's variables or to
 channel (ADR-012). The old `method`/`url`/`archive`/`filename`/`app_id` fields are still written
 alongside the steps, so a protocol 1 agent installs exactly as it did; that work
 took the negotiated protocol to 2 (ADR-014's N-1 window, which until then had no real history to
-mean anything against), and later additive bumps have since taken it to 10 — the log viewer
+mean anything against), and later additive bumps have since taken it to 11 — the log viewer
 (ADR-082), `ReclaimData` (ADR-088), managed config writes (ADR-092), cluster file operations
 (ADR-105), the destroy confirmation (ADR-107), a per-step SteamCMD depot-bitness override
-(ADR-121), a per-step SteamCMD depot-platform-OS override (ADR-123), and a node's own free-disk
-figure on every heartbeat (ADR-134).
+(ADR-121), a per-step SteamCMD depot-platform-OS override (ADR-123), a node's own free-disk
+figure on every heartbeat (ADR-134), and the install force-clean escape hatch (ADR-142).
 `internal/configfile` is the shared key-patching implementation behind both
 the `patch` step and a config file managed `patch`, so a key path means the same thing at
 install time and at provision time.
 
-**Variables and settings are separate blocks.** A variable reaches a command, an env value, an
-install step or a mount, so changing one rebuilds the pod. A setting is written into the game's
-own configuration and *declares its destination* — a config file key or an env var — so a game
-with forty-four documented keys needs no template line per key. Both embed one `Control` type,
-which is what makes the split free in the UI: `varfields.html` renders either kind. Settings
-also carry a tri-state absent/empty/set, so a game whose image owns and rewrites its own config
-file can be told to leave a key alone, which schema 2 could not express.
-
-`seed.ResolveDestinations` works out where every setting goes, once per rebuild, and both the pod
-builder and the config writer read from it — so a container's environment and a config file
-cannot disagree about whether a setting is present. A server's settings are stored in their own
-`servers.settings` column, holding the operator's own choices and never the seed's defaults:
-filling defaults in on write would collapse the tri-state permanently on first save.
+**Variables and settings are separate blocks**, both embedding one `Control` type so the UI can
+render either kind with no new component (`varfields.html`): a variable shapes how the server is
+*built* — reaching a command, an env value, an install step, or a mount — so changing one rebuilds
+the pod, while a setting is written into the game's own configuration and declares its destination
+(a config file key or an env var). Settings also carry a tri-state absent/empty/set, letting a
+game whose own image rewrites its config be told to leave a key alone — something schema 2 could
+not express. `seed.ResolveDestinations` separately resolves each setting's destination once per
+rebuild, so the pod builder and the config writer read from one result and can never disagree
+about whether a setting is present. See conventions.md's "Variables and settings" section for the
+exact value semantics, including how `servers.settings` stores only the operator's own overrides,
+never the seed's defaults.
 
 **A config file declares how it is managed**: `always` rewrites it wholesale (the default, and
 schema 2's only behaviour), `once` writes it only if absent, and `patch` sets just the keys the
 seed and its settings name, through `internal/configfile`. Patching is the only thing on the
 provisioning path that reads from a node, and a read that fails or truncates degrades to writing
-the declared keys alone rather than failing the rebuild.
+the declared keys alone rather than failing the rebuild — conventions.md adds the corollary that
+such a read is never merged into, since writing it back would delete whatever it didn't reach.
 
-**Readiness is a declared mode** — `immediate` (the default, and what every seed did before),
-`log`, `port`, or `healthcheck` — and the supervisor honours it. Schema 2's `logs.ready` was a
-substring four bundled seeds declared and nothing ever matched, because making readiness depend on
-a match risked stranding a healthy server in `starting` forever (ADR-067). The mode is what makes
-it safe: opting in is deliberate, and a timeout reports the server running anyway *with a reason*
-rather than leaving it in limbo. `mode: port` needs no game-specific knowledge, which makes it the
-right first choice for a game added blind.
-
-`immediate` is the same call at the same point it always was, and the control plane sends no
-`ReadySpec` at all for a seed that asks for nothing else — so such a seed's pod spec is unchanged.
-A log pattern is matched by `internal/agent/logscan`, which already assembles lines out of chunks
-for log-value extraction, so there is one line assembler rather than two. Only the paths that
-restart the *primary* re-establish readiness; bringing a crashed sidecar back does not, since the
-pod already satisfied its rule and a startup line will not be printed again.
+**Readiness is a declared mode** — `immediate` (the default, unchanged from what every seed did
+before, so a seed asking for nothing else gets no `ReadySpec` at all), `log`, `port`, or
+`healthcheck` — replacing schema 2's `logs.ready` substring, which four bundled seeds declared and
+nothing ever matched: making readiness depend on a match risked stranding a healthy server in
+`starting` forever (ADR-067). `mode: port` needs no game-specific knowledge, which makes it the
+right first choice for a game added blind. conventions.md's Readiness section covers the
+mode-by-mode mechanics in full, including which restarts re-establish it and why `logscan` stays
+the one line assembler for both readiness and log-value extraction.
 
 **Container images may be named symbolically.** `image: {base: steamcmd-proton}` resolves
 through the control plane to the right registry, owner and channel at provision time; a
@@ -1470,14 +1373,12 @@ applied by nothing, because the accent tokens travel as a set and a seed supplyi
 three can make its own page unreadable.
 
 **An addon is an optional container** — `containers[].optional`, a map renderer or an admin UI —
-shipped with the seed and provisioned only if the operator enables it. All three port paths take
-their container list from one `enabledContainers` function, so a disabled addon is invisible to
-allocation at creation, to `ensureContainerPorts` on rebuild, and to the pod spec by
-construction; the alternatives are an allocation nothing publishes, which reads as drift on every
-settings save, or a container port taken from an allocation that does not exist. Ports are
-released on the next rebuild rather than at the moment of the save, so the invariant holds for a
-server whose earlier save failed halfway. Validation carries the rest: an addon cannot be
-primary, nothing required may depend on one, and no template may reference one's port.
+shipped with the seed and provisioned only if the operator enables it; conventions.md's
+Ports-and-allocations and Addons entries cover how `enabledContainers` keeps a disabled addon
+invisible to allocation and to the pod spec. Ports are released on the next rebuild rather than at
+the moment of the save, so the invariant holds for a server whose earlier save failed halfway.
+Validation carries the rest: an addon cannot be primary, nothing required may depend on one, and
+no template may reference one's port.
 
 **A port declares what it is for** (`kind: game|query|rcon|web|voice|other`), and a seed may
 declare a **connect** block — a URI a client understands, an address to copy, or both. It is
@@ -1496,13 +1397,12 @@ as a connect block already does, not a second rule for the same ambiguity. Every
 already builds `Endpoint` from a real node address builds `NodeAddress` from the same call, so the
 two can never name different hosts.
 
-**A seed can carry its own migrations.** Stored values are keyed by name, so renaming a variable
+**A seed can carry its own migrations.** Stored values are keyed by name, so a bare rename
 silently discards what every operator chose — ADR-074 declined to rename Valheim's
 `crossplay_flag` for exactly that reason, since losing the stored value would have turned
 crossplay back on wherever it had been turned off. `renamed_from` and a `migrations:` block
-(`rename`/`drop`/`rewrite`/`promote`) carry values forward, with **nothing recorded per server**:
-every operation is idempotent by construction, and validation enforces that rather than trusting
-an author to be careful.
+(`rename`/`drop`/`rewrite`/`promote`) carry values forward instead; conventions.md covers the
+idempotence rule that lets nothing be recorded per server.
 
 **A schema 2 document still loads.** It is up-converted before validation, so a catalog bundle an
 operator already installed keeps working and there is exactly one shape in memory. The converter
@@ -1567,21 +1467,19 @@ The seeds themselves live in `arasoi/yggdrasil-seeds` (ADR-081, ADR-087), which 
 authored, versioned and published, and where what each one covers is documented next to it. This
 document describes the *format* and the machinery; the catalog describes the games.
 
-That repository publishes **seven seeds on `main` and eight on `develop`** at the time of writing —
-ARK Survival Ascended, Minecraft Java (Paper), Minecraft Bedrock, Valheim, Vintage Story,
-Palworld and Empyrion, with ARK Survival Evolved still on the edge channel. They exercise both
-ends of ADR-018's install
+That repository publishes a growing set of seeds across three channels — including ARK Survival
+Ascended, ARK Survival Evolved, Minecraft Java (Paper), Minecraft Bedrock, Valheim, Vintage Story,
+Palworld and Empyrion at various stages of promotion — exercising both ends of ADR-018's install
 model between them: a shared SteamCMD install mounted read-only with per-server writable overlays
 and cluster support at one end, and an image that installs the game itself with no install block
 at all at the other. Phase 5's exit criterion is stated against one of them and is tracked in the
 phase table below, not here.
 
-**A count here is a snapshot and will drift**, which it already did once — this paragraph said
-"five seeds" for as long as it took two more to be published, and nothing could have caught that,
-because the catalog is a separate repository on its own release cadence (ADR-081) and no test in
-this one can see it. Read the number as "roughly this many, as of the last edit"; the channel
-itself is authoritative, and the per-channel split is worth stating because promotion is a merge
-there too, so edge is routinely ahead.
+**The exact roster and per-channel counts are deliberately not stated here**, since this
+paragraph has already gone stale twice trying to keep one current — the catalog is a separate
+repository on its own release cadence (ADR-081) that no test in this one can see. Check `/seeds`
+on a running control plane, or the seeds repository's own channel releases, for what is actually
+published right now.
 
 **What this repository keeps is a fixture corpus**, `internal/seed/seedtest`, six bundles written
 for coverage rather than for play. It exists because the embedded set was never only a shipping
@@ -1636,19 +1534,20 @@ refuse a seed that exceeded one. Three of the four recorded drop-on-save bugs we
 failing.
 
 `internal/control/web/seedform` owns the form's shape: `Decode` turns `url.Values` into a
-`seed.Seed`, and `Encode` is its inverse, existing so that **every seed in the fixture corpus
-round-trips unchanged** and does so idempotently. That is the mechanical answer to a failure this codebase has
-recorded four times — a seventh variable, a `Required` flag, an offset relationship, a
-`logs.values` block — each found only after it shipped, by someone noticing a value had vanished.
+`seed.Seed`, and `Encode` is its inverse, existing so that every seed in the fixture corpus
+round-trips unchanged and does so idempotently — the mechanical answer to a failure this codebase
+has recorded four times: a seventh variable, a `Required` flag, an offset relationship, and a
+`logs.values` block, each found only after it shipped, by someone noticing a value had vanished.
 Two further tests join the halves: the rendered page must emit every field name the decoder reads,
 and each row prototype's path shapes must match a rendered row's, so a row added in the browser
 submits the same field set as one from the server.
 
-Decoding is **index-driven, not count-driven** — `containers.0.ports.1.name`, with the indices
-collected from what was actually submitted — so a row deleted in the browser leaves a gap and
-nothing downstream cares. Each discriminated block (an install step's `op`, a setting's
-destination, a control's `type`) reads only the fields its selected case accepts, because the form
-renders them all and hides the rest, and `Validate` rejects a field that does not belong.
+Decoding is index-driven, not count-driven, with indices collected from what was actually
+submitted, so a row deleted in the browser leaves a gap and nothing downstream cares (the same
+discipline conventions.md states for this exact code, ADR-079). Each discriminated block (an
+install step's `op`, a setting's destination, a control's `type`) reads only the fields its
+selected case accepts, because the form renders them all and hides the rest, and `Validate`
+rejects a field that does not belong.
 
 **Branding images are uploaded, fetched from a URL, or taken from Steam**, and land in the seed's
 own bundle directory (`internal/control/branding`) — so publishing the seed carries the artwork to
@@ -1676,18 +1575,20 @@ not. With nothing picked the header is still taken, so a save that never opened 
 one made with JavaScript disabled — behaves exactly as it did before.
 
 The bytes decide the filename: a raster is decoded with the standard library and stored as
-`<kind>.<detected ext>`, never as what the upload was called, so a file named `icon.png` whose
-contents are not a PNG is refused rather than served as one from this origin. **SVG is refused on
-this path and still served when hand-placed** — an operator putting one in their own bundle has
-made a local decision about their own control plane, whereas a published bundle's images are served
-from *other* operators' origins. Nothing is written until every fetch has succeeded, so a save
-cannot leave a manifest naming an image that was never retrieved.
+`<kind>.<detected ext>`, never as what the upload was called (conventions.md's Seed branding rule,
+ADR-079) — so a file named `icon.png` whose contents aren't actually a PNG is refused rather than
+served as one from this origin. SVG stays refused on this path even so, because a published
+bundle's images are served from *other* operators' origins, where a hand-placed SVG in your own
+bundle is a purely local decision about your own control plane. Nothing is written until every
+fetch has succeeded, so a save can never leave a manifest naming an image that was never
+retrieved.
 
-`guidedEditable` and its allowlist stay, at full coverage. What they guard is not today's gaps but
-the *next* field added to `seed.Seed`: one that nobody has taught the form about is unrepresentable
-by default, so a seed using it falls back to the raw-YAML pane rather than being saved without it.
-That pane is now a co-equal path rather than a fallback, and both routes converge on the same
-`internal/seed.Parse` and `Validate` every seed loads through.
+`guidedEditable`'s allowlist stays at full coverage, so it keeps guarding not today's gaps but the
+*next* field added to `seed.Seed`: one nobody has taught the form about is unrepresentable by
+default and falls back to the raw-YAML pane — the same discipline conventions.md describes for
+`guidedSeedFields`/`unrepresentableSeedFields`. That pane is now a co-equal path rather than a
+fallback, and both routes converge on the same `internal/seed.Parse` and `Validate` every seed
+loads through.
 
 **The editor is organised into five tabs — Identity, Art, Runtime, Networking, Install — beside
 a validation rail**, a visual pass over the same form above rather than a new one (ADR-079's
@@ -1711,11 +1612,10 @@ additionally carries a numbered spine. Markup only: every row's `name=` attribut
 what they were, which is what lets `seed_form_template_test.go`'s round-trip checks stay the proof
 that a save cannot silently drop a field, unchanged by any of this. Branding moved into a dialog —
 still the same three bundle-relative slots (icon, logo, banner) schema 3 actually has, named by
-where each appears rather than by pixel size — reached from the Art tab and associated with the
-outer form via `form="seedform"` on each control, since a `<dialog>` cannot itself be nested inside
-the form whose own close button already uses `<form method="dialog">` (two `<form>` elements cannot
-nest; the parser drops the inner one, and the close button would otherwise fall back to submitting
-the outer form instead of dismissing the dialog).
+where each appears rather than by pixel size — reached from the Art tab, with each control
+associated to the outer form via `form="seedform"` rather than nested inside it (conventions.md's
+two-forms-cannot-nest rule, ADR-079): nesting would mean the dialog's own `<form method="dialog">`
+close button falls back to submitting the outer form instead of dismissing the dialog.
 
 **`/seeds/new` is a chooser before it is a form**: from a Steam app id (looks up the same
 `internal/control/steam` lookup the guided form's own "Fetch from Steam" button already calls, and
@@ -1754,20 +1654,19 @@ that is also a publish target must hold nothing else worth losing. That separati
 a catalog publishable from a running control plane at all rather than only by CI (ADR-081), and
 everything below follows from it.
 
-`publish.ResolveTarget` still refuses `arasoi/yggdrasil-releases` as a checked error,
-case-insensitively, and refuses it even when set deliberately — but for the narrower reason that
-it is the one place where a wholesale release replacement takes out the distribution itself. It
-is deliberately **not** "the repository this control plane reads its catalog from": that is the
-ordinary case for whoever maintains a catalog. For an operator who is not the maintainer, GitHub's
-own permissions are the boundary, and the token's Test action asks exactly that before they press
-anything.
+`publish.ResolveTarget` refuses `arasoi/yggdrasil-releases` as a checked error,
+case-insensitively, even when set deliberately, for the narrower reason that a wholesale release
+replacement there would take out the distribution itself — not because it is the repository this
+control plane reads its catalog from, which stays the ordinary, safe case for whoever maintains
+one (conventions.md's Configuration section states the general refusal rule; ADR-081). For an
+operator who is not the maintainer, GitHub's own permissions are the boundary, and the token's
+Test action asks exactly that before they press anything.
 
 **This path is for an operator with no CI**, or one publishing a catalog for their own fleet from
-a seeds directory that is not a git clone at all. Where CI publishes — as it does for the
-project's own catalog (ADR-081's amendment) — it is the one writer, and `seeds.publish_repo` is
-left **unset**, which renders the Publish button with "Set a publishing repository in Settings
-first" and makes it incapable of becoming a second writer. Inert by configuration rather than by
-removal.
+a seeds directory that is not a git clone at all; the project's own catalog instead leaves
+`seeds.publish_repo` **unset**, since CI in the seeds repository is its one writer and an unset
+target renders the Publish button inert ("Set a publishing repository in Settings first") rather
+than risking a second writer.
 
 Packing runs first and completely, before anything on the remote is touched. `seedpack` loads
 every bundle through the strict loader and rejects a version `version.Compare` cannot order, so a
@@ -1903,13 +1802,13 @@ the page an operator would use to correct it. The in-memory index cache is keyed
 up to an hour after a switch.
 
 **A bundle on disk that will not load is skipped, not fatal.** The catalog and operator layers
-are files the running binary did not ship, so closing a validation gap invalidates bundles that
-were perfectly acceptable when they were installed — and refusing to start then crash-loops the
-control plane over a file it could ignore, with no UI left through which to remove it. Startup
-and the in-process reload both use `seed.LoadDirTolerant`, logging each skipped bundle at error
-level and falling through to the layer beneath. `LoadFS` stays strict, and is what the base image
-library and the seed fixture corpus load through: those are compiled in or checked in, so a
-failure there is a build defect rather than a file an operator installed.
+hold files the running binary never shipped, so a later validation tightening can invalidate a
+bundle that was fine when it was installed, and refusing to start over it would crash-loop the
+control plane with no UI left through which to remove it (the same `seed.LoadDirTolerant` rule
+conventions.md states). Startup and the in-process reload both use it, logging each skipped
+bundle at error level and falling through to the layer beneath. `LoadFS` stays strict, and is what
+the base image library and the seed fixture corpus load through: those are compiled in or checked
+in, so a failure there is a build defect rather than a file an operator installed.
 
 ## Container image library
 
@@ -1932,10 +1831,9 @@ generic base image library filling that gap:
   (ADR-047's 2026-08-27 amendment) — the two builds share a SONAME but are ABI-incompatible, so
   only installing the real package fixes it. Its `entrypoint.sh` also stages SteamCMD's own
   native `steamclient.so` into `$HOME/.steam/sdk<32|64>` unconditionally on every container
-  start, before the privilege-drop decision below — the generic, base-image form of a fix three
-  seeds (Garry's Mod, Team Fortress 2, Palworld) each needed by hand in their own launch
-  command, moved here per the project's own rule that container preparation belongs in the
-  image, never a seed's command line (ADR-125).
+  start, before the privilege-drop decision below — replacing a fix three seeds (Garry's Mod,
+  Team Fortress 2, Palworld) used to duplicate by hand in their own launch command (ADR-125; see
+  conventions.md's container-preparation rule).
 - **`images/base-steamcmd-proton`** — `FROM` `base-steamcmd`, adding a pinned GE-Proton runtime
   and `umu-launcher` (ADR-047's amendment), for a Steam-distributed game whose dedicated server
   has no native Linux build at all and ships only a Windows binary. ARK Survival Ascended is the
@@ -2067,11 +1965,9 @@ does: "in" and "out" have to stay tellable apart whichever accent is active.
 
 ## The UI is translatable
 
-Every operator-facing string goes through `internal/i18n` (ADR-086), keyed by its own **English
-source text** rather than an invented identifier. A template reads as English prose
-(`{{T `Back up now`}}`), and a message with no translation falls back to its key — which is
-already correct English. So a partially translated language is usable, and there is no state in
-which a page shows a raw identifier or a blank.
+Every operator-facing string goes through `internal/i18n`, keyed by its own English source text
+rather than an invented identifier, with a generated-and-checked catalogue guarded against silent
+drift — see conventions.md's "Translation" section for the full rule and its guarantees (ADR-086).
 
 Templates are parsed **once per shipped language**, because a `FuncMap` is fixed at parse time
 and `T` must close over the language it renders in; `render()` then selects a pre-parsed set and
@@ -2080,24 +1976,14 @@ does no per-request template work. Language resolves as the operator's stored pr
 request, so a change takes effect on the next page load with nothing to invalidate. `<html lang>`
 declares whichever language actually rendered.
 
-**Plural forms come from CLDR via `x/text`, not from the catalogue**, so a language distinguishing
-one/few/many selects correctly the moment its file is added, with no code change. That is what
-makes adding a language a data change: drop a locale file beside `en.json` and it appears in the
-setting, the matcher and every page. Formatting follows the locale too — German writes
-`64,0 MiB` — while unit symbols and seed-schema literals (`patch`, `tcp`, `amd64`) deliberately
-stay English, since translating either would make it wrong.
+Formatting follows the locale too — German writes `64,0 MiB` — while unit symbols and
+seed-schema literals stay English by design (see conventions.md).
 
-The English catalogue is **generated from the source by the same test that checks it**, the
-discipline `internal/seed/schema.json` already uses. Three guards close the silent failures: a
-used key missing from the catalogue, an orphaned entry (what an edited English string leaves
-behind), and a coverage ceiling that may only come down.
-
-**English is the only catalogue that ships.** The machinery is complete and exercised; what is
-absent is translated content, which nobody here can verify — and a machine translation of
-~950 strings would put unreviewable text on destructive actions. Because that leaves every
-language-selection path unexercised by construction, a test injects a second catalogue and drives
-a real request through `render()`, asserting it renders in that language, declares it, and falls
-back to English for a key it lacks.
+**English is the only catalogue that ships.** The machinery is complete and exercised — a test
+injects a second catalogue and drives a real request through `render()`, asserting it renders in
+that language, declares it, and falls back to English for a key it lacks — but what is absent is
+translated content, which nobody here can verify: a machine translation of ~1,040 strings would
+put unreviewable text on destructive actions.
 
 One limit is carried forward rather than read as done. The ~150 template fragments that were
 sentences split by inline markup — each half a sentence that could not be translated alone — are
@@ -2124,59 +2010,31 @@ bundle. That is a real gap, and the honest one to carry forward here in this doc
 
 ## Operator settings
 
-Configuration splits on one question: **is it needed before there is a database to read?**
+Configuration splits on one question — is it needed before there is a database to read?
+`yggd.yaml` keeps what is (listen addresses, `data_dir`, the database path, `seeds_dir`),
+immutable after startup; everything else is a runtime setting in the `settings` table, adjustable
+from `/settings` while yggd runs. See conventions.md's "Configuration versus settings" for the
+resolution order, secret-handling, and most-repeated-bug rules (ADR-078).
 
-`yggd.yaml` keeps what is — listen addresses, `data_dir`, the database path, `seeds_dir` —
-resolved once at startup into an immutable struct, and changing one means restarting the
-process that read it. Everything else is a **runtime setting** in the `settings` table,
-adjustable from `/settings` while yggd runs (ADR-078).
+The page itself is a tab rail beside one panel per group with a single search box over every
+setting, reusing `static/varform.js` unchanged from the seed-variables form (ADR-085); Sign-in's
+ten settings additionally sub-divide into per-provider boxes (Shared, Microsoft, Apple, Discord)
+decided in the web layer from each key's own prefix (ADR-116). A setting an operator has actually
+set gets a small dot and a heavier label, so the page can be scanned for what is configured rather
+than read row by row. Release channels and a node's own settings (address, port range) are
+surfaced on `/settings` with a link but stay owned by their own pages, since switching one is an
+action rather than a stored value (ADR-056).
 
-Resolution is **database → yggd.yaml → registry default**, and the page says which is in
-effect, so a value an operator put in the file is never silently overruled without
-explanation. Clearing an override is a delete rather than a write of the empty string: those
-are different states, and "give me the default back" is the first one.
-
-**The page itself is a tab rail beside one panel per group, with a single search box over
-every setting** — the identical markup and script (`static/varform.js`) ADR-085 built for a
-seed's variables, reused unchanged rather than given a second implementation of the same shape.
-Sign-in's ten settings additionally sub-divide into per-provider boxes (Shared, Microsoft,
-Apple, Discord), decided in the web layer from each key's own prefix — a presentation grouping
-the registry itself knows nothing about (ADR-116). A setting an operator has actually set gets
-a small dot and a heavier label, so the page can be scanned for what is configured rather than
-read row by row.
-
-The table is key/value; what a key *means* lives in `internal/control/settings` as a registry
-of typed `Definition`s. So adding a setting is a Go declaration plus a consumer — no
-migration, no template edit, no new form field, because the page renders whatever the registry
-declares. Nine ship, each with a live consumer: `log.level` (the process's own
+The table is key/value; what a key *means* lives in `internal/control/settings` as a registry of
+typed `Definition`s. Nine ship, each with a live consumer: `log.level` (the process's own
 `slog.LevelVar`, so debug can be switched on and off without a restart), `stats.retention_days`
-(read by `telemetry.Collector` on every prune, so lowering it frees space within a minute),
-`backups.retention_days` (read by the scheduler's archive prune the same way, ADR-088),
-`nodes.disk_low_percent` (read by every node page and the fleet's node groups through the one
-`Capacity.DiskLow` decision, ADR-134), `ui.language` (resolved per request, ADR-086),
-`steam.api_key`, `seeds.catalog_repo` (where the
-Seeds page downloads from, ADR-081), and the pair that lets this control plane publish its own
-seeds — `seeds.publish_repo` and `seeds.publish_token` (ADR-079). That last one is the first
-credential here that writes somewhere
-outside this deployment, which is why its target has no default and why the one repository it must
-never name is refused rather than merely discouraged. Its catalog sibling is the mirror image: a
-read is safe, so it has a default and every control plane gets the project's catalog without being
-configured.
-
-**A secret's value cannot reach the page**, as a property of the types rather than a rule the
-template is trusted to follow: `Manager.Resolve` — what the page reads — reports only whether
-one is *configured*, and `Manager.Value` — what a consumer reads — returns the real thing. An
-empty submission means "leave the stored one alone", so removing one is its own Clear action.
-
-**Every setting must name itself in `web.applySetting`**, whose default case is an error. A
-setting an operator can save that nothing reads is this codebase's most-repeated bug (ADR-067,
-ADR-071, ADR-077) and a settings page hides it especially well, because saving appears to
-succeed; a test saves every registry key so a new one fails there instead.
-
-The **release channels are shown but not owned**. Switching one archives the running binary and
-changes what Update installs, so ADR-056 deliberately keeps that setting on the page performing
-the action; `/settings` reports both with a link. A **node's** own settings — its address, its
-port range — likewise belong to that node and stay on its page.
+(read by `telemetry.Collector` on every prune), `backups.retention_days` (read by the scheduler's
+archive prune the same way, ADR-088), `nodes.disk_low_percent` (read through `Capacity.DiskLow`,
+ADR-134), `ui.language` (ADR-086), `steam.api_key`, `seeds.catalog_repo` (ADR-081), and the pair
+that lets this control plane publish its own seeds, `seeds.publish_repo` and
+`seeds.publish_token` (ADR-079) — the first credential here that writes outside this deployment,
+which is why its target has no default and the one repository it must never name is refused
+outright.
 
 `store.Open` narrows the database file to `0600`, since it holds password hashes, session
 tokens, bootstrap tokens and now credentials. Defence in depth rather than the boundary: the
@@ -2280,99 +2138,48 @@ the entire update story rests on. If it is not proven by killing the agent under
 
 **Phase 5's mechanism is built and verified, but not yet against ARK by name.** Shared installs,
 refcounting, read-only mounts with writable overlays, cluster creation and joining, and the
-orchestrated install-update job (stop exactly what's running, update, restart exactly what was
-stopped) are all implemented and proven — against a real control plane, a real `ygg-agent`, and
-real Podman, no fakes — using a synthetic seed shaped identically to `ark-survival-ascended.yaml`
-(one shared install, five map servers, one cluster) rather than the real thing, since ARK
-Survival Ascended has no official Linux server: a real install needs a SteamCMD-plus-Proton
-wrapper. Driving that synthetic seed live also caught a real bug now fixed: `Provision` was not
-publishing a state change for a freshly provisioned but not-yet-started server, so a seed-driven
-server that is not started immediately after creation never reported its containers upstream and
-the "does this server have any containers yet" reconcile gate never cleared, leaving it stuck on
-"installing" in the UI forever.
+orchestrated install-update job are all implemented and proven — against a real control plane, a
+real `ygg-agent`, and real Podman — using a synthetic seed shaped like `ark-survival-ascended.yaml`
+(one shared install, five map servers, one cluster), since ARK Survival Ascended has no official
+Linux server and needs a SteamCMD-plus-Proton wrapper. That testing found and fixed a real bug:
+`Provision` was not publishing a state change for a freshly provisioned but not-yet-started server,
+so such a server never reported its containers upstream and stayed stuck on "installing" forever.
 
-The SteamCMD-plus-Proton wrapper itself is no longer the open half of this: `images/base-
-steamcmd-proton` ("Container image library" above) is built, and — unlike the plain "it builds"
-bar most of this table otherwise uses — actually proven to run Wine/Proton for real: `umu-run
-createprefix` produces a genuine, fully-populated Wine prefix through the real container
-entrypoint (ADR-047's amendment has the full account, including two bugs — a wrong env var name
-and a root-vs-non-root permission error — that only surfaced by actually running it, not from
-reading the Dockerfile). The catalog's `ark-survival-ascended` seed points its primary
-container at `base-steamcmd-proton` directly (no separate `yggdrasil/ark-asa` image — nothing
-ARK-specific belongs baked into one) and invoked `umu-run` against ARK ASA's documented Windows
-binary path — the invocation that later moved behind `ygg-proton`, for the reasons the rest of
-this entry works through.
+`images/base-steamcmd-proton` (see "Container image library" above) is built and proven to run
+Wine/Proton for real, and **a real ARK Survival Ascended server now boots** through it: the primary
+container's `ygg-proton` wrapper invokes GE-Proton directly rather than through `umu-launcher` — the
+`umu-launcher` path stalls indefinitely inside Sentry/Crashpad's own startup sequence, and its only
+known workaround (renaming the game's own crash-handler binary out of the way) requires mutating the
+read-only-mounted install, which ADR-018's model forbids. Getting a real depot running via raw Proton
+needed several further fixes, fully recorded in ADR-047's amendments: GE-Proton needs a newer glibc
+than Debian `bookworm` ships, which is why `base-linux` and everything built on it moved to `trixie`;
+a per-server writable directory must be owned/writable by the container's user or Unreal silently
+redirects its log to Wine's stubbed Windows event log and dies with nothing to read; `/etc/machine-id`
+must exist; and the actual indefinite hang on this path was ARK's own bundled `steamclient64.dll`
+winning over the system one on application-directory precedence and blocking forever waiting for a
+Steam client that was never there. With those fixed, a real depot boots to "has successfully
+started!" in about 18 seconds with the game port bound and RCON listening, install mounted read-only
+with per-server writable overlays exactly as ADR-018 specifies.
 
-That path is no longer just documented, either: a real `+app_update 2430930` (~12 GB) has
-actually been fetched and run against this image. The exe path was exactly right, and the engine
-genuinely starts — `ShooterGame.log` shows a real `ARK Version: 92.28` line, not a synthetic
-stand-in — once two more real, confirmed bugs were fixed (`PROTON_USE_XALIA=0`, needed by any
-Windows game this image runs, not just ARK; `PROTON_USE_WINED3D=1`, ARK-specific, avoiding a
-VKD3D-Proton D3D12 crash `-nullrhi` does not prevent). It still does not reach a ready state via
-`umu-run`: it stalls indefinitely inside Sentry/Crashpad's startup sequence, a specific,
-reproduced, partially-diagnosed problem whose only workaround found so far does not fit
-ADR-018's read-only install model.
+The exit criterion nonetheless **stays open**: the Steam subsystem reports `FAILED` (expected
+harmless, since ASA lists through Epic Online Services, but unconfirmed by a real client connecting);
+this proves one server booting, not phase 5's five-maps-one-install-with-character-transfer workflow;
+and it was driven with Podman directly, not yet through `yggd` and `ygg-agent` end to end.
 
-A known-working reference image (`ghcr.io/parkervcp/steamcmd:proton`, with a documented ARK ASA
-track record) reframed this further: it invokes GE-Proton directly, never through `umu-launcher`,
-and testing that path exposed and fixed a real, structural gap — GE-Proton needs a newer glibc
-than Debian bookworm ships, silently papered over by `umu-launcher`'s own sandboxed runtime.
-`images/base-linux` and everything built on it moved to Debian `trixie` as a result (ADR-047's
-third amendment has the full account, including two further regressions that move surfaced and
-fixed: `umu-launcher`'s vendored Python extension needed the `debian-13` build, and
-`base-dotnet`'s apt repo needed a different signing key entirely on Debian 13). Raw Proton then
-got substantially further than `umu-run` ever did — past a missing prefix directory, a relative-
-path resolution difference, and a native Steamworks bridge library (`lsteamclient.so`) whose
-real search path was extracted directly from the compiled binary via `strings`.
-
-**A real ARK Survival Ascended server now boots.** Reading the matching Pelican egg alongside that
-image closed the remaining gaps (ADR-047's final amendment has the full account): the per-server
-writable directory has to be writable by the container's user or Unreal silently redirects its log
-to Wine's stubbed Windows event log and dies with nothing to read; `/etc/machine-id` has to exist;
-and — the actual indefinite hang, found with `WINEDEBUG=+loaddll` — ARK's depot ships its own
-Windows `steamclient64.dll`, which wins on application-directory precedence and then blocks forever
-waiting for a Steam client that is not there. With those fixed, a real depot boots to
-`Server: "…" has successfully started!` in about 18 seconds with the game port bound and RCON
-listening, **with the install mounted read-only and per-server writable overlays exactly as ADR-018
-specifies**. The invocation details now live in `ygg-proton` inside the image, so the seed's command
-is a single readable line.
-
-The exit criterion nonetheless **stays open**, for reasons worth stating plainly rather than
-rounding off: the Steam subsystem reports `FAILED` (a direct consequence of the `steamclient64`
-override — expected to be harmless since ASA lists through Epic Online Services, but no real game
-client has connected to confirm it); this proves one server booting, not phase 5's five-maps-one-
-install-with-character-transfer workflow; and it was driven with Podman directly, not yet through
-`yggd` and `ygg-agent` end to end.
-
-**Phase 6 is done, against a criterion that was reworded to what the phase actually proves** —
-the same correction phase 8 already made, for the same reason, and it should have been made at
-the same time. It originally read "**Dune Awakening**: game + database + broker start in order and
-stop safely", and every word of that except the game's name was met: dependency-ordered start,
-health gates, reverse-order shutdown with the primary first, sidecar crash-loop restart into
-`degraded`, and the console role selector and stats panel are all implemented and proven by a
-full-stack test (real control plane, real `ygg-agent`, real Podman, no fakes) and a live browser
-session against a genuinely running multi-container pod.
-
-What was never met is the name. **Dune Awakening has no public dedicated-server image**, so there
-is no seed to build against and no amount of work in this repository can produce one — the
-criterion was hostage to a third party's release decision rather than to anything here. Phase 8's
-row was reworded on exactly that reasoning ("naming that game in a backup phase's criterion made
-this phase's completion hostage to a dependency that has nothing to do with backups") and then
-pointed at this row as the place the dependency legitimately belonged. That was wrong: the
-dependency does not belong anywhere. A multi-container pod is the capability, and Dune Awakening
-was only ever the example that motivated it.
-
-So the criterion now describes what a multi-container pod must do, and it is met against the
-synthetic game+database+broker seed — which is the *right* target rather than a stand-in, because
-what is being proven is the pod mechanism and a synthetic seed exercises its corners more
-deliberately than any one game would. **A real Dune Awakening seed remains wanted** and is
-tracked as catalog work in `arasoi/yggdrasil-seeds` where every other game lives (ADR-087), not
-as a phase gate here.
-
-The honest limit, carried forward rather than read as covered: no seed in the published catalog
+**Phase 6 is done.** Its exit criterion no longer names Dune Awakening specifically, since that
+game has no public dedicated-server image and naming it would make the criterion hostage to a
+third party's release decision rather than to anything in this repository. It instead describes
+what a multi-container pod must do — dependency-ordered start, health gates, reverse-order
+shutdown with the primary first, sidecar crash-loop restart into `degraded`, and per-container
+console/stats — proven by a full-stack test (real control plane, real `ygg-agent`, real Podman, no
+fakes) and a live browser session against a genuinely running multi-container pod, both run
+against a synthetic game+database+broker seed, which is the *right* target rather than a stand-in:
+what is being proven is the pod mechanism, and a synthetic seed exercises its corners more
+deliberately than any one real game would. A real Dune Awakening seed remains wanted and is
+tracked as catalog work in `arasoi/yggdrasil-seeds` (ADR-087), not as a phase gate here. The
+honest limit, carried forward rather than read as covered: no seed in the published catalog
 declares more than one container, so the multi-container path has never run against a game an
-operator actually plays. That is a gap in the *catalog*, and it is the same gap whether this row
-says "in progress" or "done".
+operator actually plays.
 
 **Phase 7's mechanism is built and verified end-to-end, including live in the browser**: sign
 and register a binary, click Update on a connected node, and watch a real agent process
@@ -2415,23 +2222,14 @@ The one thing not proven is a *cross-architecture* update, since both binaries h
 for the host. That is the same limit every live verification in this document has, and the
 architecture is checked before an update is offered rather than at install time.
 
-**Phase 8 is done, against a criterion that was reworded to what the phase actually proves.**
-It originally read "restore a Dune pod including its database", and that sentence was met
-literally: a real control plane, a real `ygg-agent`, and real Podman back up a multi-container
-pod (primary + database sidecar with a volume), run a pre-hook standing in for `pg_dump` via
-`Runtime.Exec`, destroy the sidecar's live data, restore it, and bring the whole pod back up
-running. But it was met against the same synthetic game+database+broker seed phase 6 uses, for
-the same reason — there is no public Dune Awakening image to build a real seed against — so
-naming that game in a backup phase's criterion made this phase's completion hostage to a
-dependency that has nothing to do with backups. The criterion now describes the capability
-that was demonstrated.
-
-This paragraph used to end "**Dune Awakening by name remains phase 6's open item**, where the
-dependency actually belongs", and that was half right. Moving the dependency off a backup phase
-was correct; parking it on phase 6 was not, because it does not belong on any phase — a game with
-no public server image cannot be a gate on work that is finished. Phase 6's row has since been
-reworded on the same reasoning, and a real Dune Awakening seed is catalog work rather than a
-phase item.
+**Phase 8 is done.** Its criterion was reworded the same way and for the same reason as phase 6's —
+Dune Awakening has no public dedicated-server image, so naming it made a backup phase's completion
+hostage to an unrelated dependency. It now describes the capability actually demonstrated: a real
+control plane, a real `ygg-agent`, and real Podman back up a multi-container pod (primary plus a
+database sidecar with a volume), run a pre-hook standing in for `pg_dump` via `Runtime.Exec`,
+destroy the sidecar's live data, restore it, and bring the whole pod back up running — against the
+same synthetic game+database+broker seed phase 6 uses. Phase 6's row has since been reworded on the
+same reasoning, and a real Dune Awakening seed is tracked as catalog work rather than a phase item.
 
 Nothing is outstanding from the original scope. What the table's row bundled in but ADR-042
 deferred as its own follow-on work rather than shoehorning into that round — a cron-like
