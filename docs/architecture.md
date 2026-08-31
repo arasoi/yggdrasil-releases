@@ -1064,6 +1064,17 @@ for a server somebody configured by hand, or a file edited before the seed had a
 key. Only values that differ are adopted, and a file that could not be read whole contributes
 nothing, which is the same judgement patching makes in the other direction.
 
+**An upload can be extracted instead of written literally** (ADR-146). The upload form's "Extract
+as archive (.zip)" checkbox sends `FileWrite.extract` (protocol 12); `internal/agent/files.Root
+.ExtractZip` unpacks the bytes into the target directory using the same `internal/archive.ExtractZip`
+and zip-slip guard `internal/agent/install` already trusts for a downloaded archive, denylist-enforced
+the same way an ordinary upload is — never the `managed` exemption above, which is for a seed's own
+declared rewrite, not an operator's. A decompressed-size cap (`maxExtractedBytes`, 512 MiB) is checked
+against the archive's declared entry sizes before anything is written, since nothing upstream bounds
+the *unpacked* size of an upload, only the compressed bytes crossing the wire. This exists for a mod
+or resource pack that is genuinely many files in nested folders — a real distribution shape this
+project had no seed exercising until FiveM's own resource ecosystem needed it.
+
 **A cluster's shared volume gets the same six file operations**, at `/clusters/{id}/files` — the
 existing wire messages widened with an alternate `cluster_id` field, mutually exclusive with
 `server_id`, rather than a second set of them, since a cluster volume sits outside any server's
@@ -1084,7 +1095,9 @@ destination count can keep growing — beside an inset content pane with a slim 
 **Every server has a page** at `/servers/{id}`: a breadcrumb, a tab strip shared by Overview,
 Console, Files, Backups and Settings, and lifecycle controls that stay visible across all five. Before
 this, those were three unrelated top-level pages reached from a table row, with nothing on
-screen tying them to the server they belonged to. Overview shows the pod's containers (every
+screen tying them to the server they belonged to. A seed declaring a container UI (ADR-147) adds a
+sixth, conditional tab for that addon's own web interface, proxied rather than linked to directly.
+Overview shows the pod's containers (every
 server is a pod, ADR-017), its allocations joined to the seed declaration that produced them
 so an offset-derived port reads as derived rather than as an unexplained number (ADR-048),
 what the server is built from, and its backup position — reusing the console page's existing
@@ -1309,11 +1322,12 @@ control plane — so the agent still needs no access to a seed's variables or to
 channel (ADR-012). The old `method`/`url`/`archive`/`filename`/`app_id` fields are still written
 alongside the steps, so a protocol 1 agent installs exactly as it did; that work
 took the negotiated protocol to 2 (ADR-014's N-1 window, which until then had no real history to
-mean anything against), and later additive bumps have since taken it to 11 — the log viewer
+mean anything against), and later additive bumps have since taken it to 12 — the log viewer
 (ADR-082), `ReclaimData` (ADR-088), managed config writes (ADR-092), cluster file operations
 (ADR-105), the destroy confirmation (ADR-107), a per-step SteamCMD depot-bitness override
 (ADR-121), a per-step SteamCMD depot-platform-OS override (ADR-123), a node's own free-disk
-figure on every heartbeat (ADR-134), and the install force-clean escape hatch (ADR-142).
+figure on every heartbeat (ADR-134), the install force-clean escape hatch (ADR-142), and the
+Files page's zip-extract option (ADR-146).
 `internal/configfile` is the shared key-patching implementation behind both
 the `patch` step and a config file managed `patch`, so a key path means the same thing at
 install time and at provision time.
@@ -1379,6 +1393,17 @@ invisible to allocation and to the pod spec. Ports are released on the next rebu
 the moment of the save, so the invariant holds for a server whose earlier save failed halfway.
 Validation carries the rest: an addon cannot be primary, nothing required may depend on one, and
 no template may reference one's port.
+
+**A container's own web UI can get its own tab, proxied rather than linked to directly**
+(`containers[].ui`, ADR-147) — the case a database admin tool beside a bundled database exists
+for. At most one container per seed may declare it, so a server's tab strip never has to choose
+among several; the tab appears only while that container is currently enabled. `GET
+/servers/{id}/addon` is the ordinary tab chrome around an iframe, and
+`/servers/{id}/addon/proxy/...` is where `yggd` itself reverse-proxies to the container's node and
+allocated port, resolved fresh on every request. Proxying rather than linking directly to the
+node's address is deliberate: a direct link breaks in an iframe the moment the operator reaches the
+UI through the Cloudflare tunnel (mixed content, HTTPS parent page and bare HTTP target), where a
+same-origin proxy does not.
 
 **A port declares what it is for** (`kind: game|query|rcon|web|voice|other`), and a seed may
 declare a **connect** block — a URI a client understands, an address to copy, or both. It is
