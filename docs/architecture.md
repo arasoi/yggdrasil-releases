@@ -2113,30 +2113,46 @@ the install path is now the image's primary consumer.
 No message broker, no external cache, no separate reverse proxy. The control plane is one
 binary and one database file.
 
-## Delivery phases
+## Delivery history
 
-| Phase | Status | Content | Exit criteria |
-|-------|--------|---------|---------------|
-| 0 | **Done** | Repo, docs, proto contract, config, DB schema, both binaries build and start | `yggd` serves a health endpoint; `ygg-agent` starts and logs |
-| 1 | **Done** | Enrollment, mTLS, persistent stream, protocol version negotiation, node registry with architecture, node list UI | A remote agent appears in the UI and survives restarts of both sides |
-| 2 | **Done** | `Runtime` interface + Docker impl, `PodSpec` (single-container), labelling, adoption, supervisor state machine, start/stop/kill | `kill -9` the agent while a server runs: the server survives, and the restarted agent adopts it with correct state |
-| 3 | **Done** | Console streaming (xterm.js) with stdin and multi-viewer fan-out. File browser, editor, and upload, sandboxed per server (ADR-033) | Play a full session end-to-end from the browser |
-| 4 | **Done** | Seed schema, Job entity, install pipeline with progress, config templating, allocations UI | Minecraft **Java and Bedrock** run from seeds alone, with no game-specific Go code |
-| 5 | **In progress** | Shared installs, refcounting, read-only mounts with writable overlays, clusters, orchestrated install updates | **ARK**: one install, five maps, character transfer between them, one-button update that stops and restarts exactly what was running |
-| 6 | **Done** | Multi-container pods: per-pod networks, dependency ordering, health gates, reverse-order shutdown, `degraded`, sidecar log/stat views | Start a game + database + broker pod in dependency order behind a health gate, crash-loop a sidecar into `degraded` and recover it, read each container's own logs and stats, and stop the pod in reverse order with the primary first |
-| 7 | **Done** | Signed agent binary distribution, UI-triggered update, N-1 compatibility testing | Update every agent from the UI while servers stay up — including an agent four protocol versions behind, with its server running throughout (`hack/n1-check.sh`) |
-| 8 | **Done** | Manual and scheduled backup and restore with per-container hooks, cluster volume backups, and resource graphs | Back up a multi-container pod, run its `pre` hook, destroy the database sidecar's data, restore it, and bring the pod back up running |
+This project began as an eight-phase delivery plan (0 through 8, below) that took it from
+nothing to a working fleet manager. That plan is finished, and phase-based tracking ends with
+it: everything built since — federated sign-in, i18n, the settings registry, cluster
+inheritance, the players page, disk monitoring, force-clean install, desired-state
+reconciliation, the fleet-wide jobs page, and every other capability this document describes
+above — is ongoing fleet-operations feature work with no phase to attach to, and belongs to no
+row in a table like this one. `docs/decisions.md` is the actual current record of it, entry by
+entry, in the order it happened; `grep -n '^### ADR' docs/decisions.md` finds anything by title.
+What follows is kept as history, not as a status board — the one exception being phase 5, whose
+original scope is still genuinely unfinished.
 
-**Phase 2 must model a server as a pod from the start**, even though every pod has exactly one
-container until phase 6. A server that owns a *set* of containers with one primary costs
-almost nothing to build in phase 2 and is an invasive refactor to retrofit in phase 6, since
-console attach, stats, adoption, and the state machine all change shape.
+| # | What it built |
+|---|---|
+| 0 | Repo, docs, proto contract, config, DB schema, both binaries build and start |
+| 1 | Enrollment, mTLS, persistent stream, protocol version negotiation, node registry with architecture, node list UI |
+| 2 | `Runtime` interface + Docker impl, `PodSpec` (single-container), labelling, adoption, supervisor state machine, start/stop/kill |
+| 3 | Console streaming (xterm.js) with stdin and multi-viewer fan-out; file browser, editor, and upload, sandboxed per server (ADR-033) |
+| 4 | Seed schema, Job entity, install pipeline with progress, config templating, allocations UI |
+| 5 | Shared installs, refcounting, read-only mounts with writable overlays, clusters, orchestrated install updates — **the one row below still open** |
+| 6 | Multi-container pods: per-pod networks, dependency ordering, health gates, reverse-order shutdown, `degraded`, sidecar log/stat views |
+| 7 | Signed agent binary distribution, UI-triggered update, N-1 compatibility testing |
+| 8 | Manual and scheduled backup and restore with per-container hooks, cluster volume backups, and resource graphs |
 
-Phase 2's exit criterion is deliberately brutal, because agent statelessness is the property
-the entire update story rests on. If it is not proven by killing the agent under load in phase
-2, it will not hold in phase 7.
+Phases 0, 1, 3 and 4 each closed on the first pass and need no further account. The rest are
+worth a paragraph each, either for a design decision that still shapes the codebase or because
+the phase's own scope was never fully closed out.
 
-**Phase 5's mechanism is built and verified, but not yet against ARK by name.** Shared installs,
+**Phase 2 modeled a server as a pod from the start**, even though every pod had exactly one
+container until phase 6. A server that owns a *set* of containers with one primary cost almost
+nothing to build there and would have been an invasive refactor to retrofit later, since console
+attach, stats, adoption, and the state machine all change shape. Its own exit criterion —
+`kill -9` the agent while a server runs, and confirm the restarted agent adopts it with correct
+state — was deliberately brutal, because agent statelessness is the property the entire
+zero-downtime-update story rests on: unproven under load this early, it would not have held once
+phase 7 needed it.
+
+**Phase 5's mechanism is built and verified, but not yet against ARK by name — this is the one
+piece of the original eight-phase scope still open.** Shared installs,
 refcounting, read-only mounts with writable overlays, cluster creation and joining, and the
 orchestrated install-update job are all implemented and proven — against a real control plane, a
 real `ygg-agent`, and real Podman — using a synthetic seed shaped like `ark-survival-ascended.yaml`
@@ -2222,14 +2238,14 @@ The one thing not proven is a *cross-architecture* update, since both binaries h
 for the host. That is the same limit every live verification in this document has, and the
 architecture is checked before an update is offered rather than at install time.
 
-**Phase 8 is done.** Its criterion was reworded the same way and for the same reason as phase 6's —
-Dune Awakening has no public dedicated-server image, so naming it made a backup phase's completion
-hostage to an unrelated dependency. It now describes the capability actually demonstrated: a real
-control plane, a real `ygg-agent`, and real Podman back up a multi-container pod (primary plus a
-database sidecar with a volume), run a pre-hook standing in for `pg_dump` via `Runtime.Exec`,
-destroy the sidecar's live data, restore it, and bring the whole pod back up running — against the
-same synthetic game+database+broker seed phase 6 uses. Phase 6's row has since been reworded on the
-same reasoning, and a real Dune Awakening seed is tracked as catalog work rather than a phase item.
+**Phase 8 is done.** Its own criterion originally named Dune Awakening too, for the same reason
+phase 6's did, and was corrected on the same reasoning: naming a game with no public
+dedicated-server image made a backup phase's completion hostage to an unrelated dependency. What
+it actually demonstrated is a real control plane, a real `ygg-agent`, and real Podman backing up a
+multi-container pod (primary plus a database sidecar with a volume), running a pre-hook standing
+in for `pg_dump` via `Runtime.Exec`, destroying the sidecar's live data, restoring it, and bringing
+the whole pod back up running — against the same synthetic game+database+broker seed phase 6 uses.
+A real Dune Awakening seed remains catalog work, not a gate on either phase.
 
 Nothing is outstanding from the original scope. What the table's row bundled in but ADR-042
 deferred as its own follow-on work rather than shoehorning into that round — a cron-like
