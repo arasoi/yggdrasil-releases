@@ -1423,6 +1423,17 @@ A published port whose image cannot be told what to bind to at all may also need
 `container_port` (ADR-150) to be reachable in the first place — Adminer's own standalone server
 always listens on a fixed 8080 regardless of the host port it is allocated.
 
+**A container's `ui` may also declare `login`, to auto-submit its own login form** (ADR-152) —
+values yggd already knows (a generated database password, a fixed username) rendered through the
+same templating every other seed string uses, into the iframe's own `data-addon-autologin`
+attribute. `static/addonlogin.js` polls the iframe's `contentDocument` — same-origin, since
+everything is proxied through this control plane's own address — for a password input, fills each
+named field, and submits the form the addon itself rendered once one appears; a later internal
+navigation inside the addon finds no password field and does nothing, so this never re-submits
+credentials into a page the operator is already signed into. Adminer's own login form takes a
+per-session CSRF token from the page it just served, which is exactly why this runs client-side
+rather than as a second server-side POST built without ever having loaded that page.
+
 **A port declares what it is for** (`kind: game|query|rcon|web|voice|other`), and a seed may
 declare a **connect** block — a URI a client understands, an address to copy, or both. It is
 rendered per request rather than stored, because it templates over the node's address, which can
