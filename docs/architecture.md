@@ -169,6 +169,18 @@ the allocated port. A seed whose image starts the server itself, and so never re
 command, has to be handed the port through env instead — Bedrock's `SERVER_PORT`. Getting this
 wrong is silent: the server starts, logs nothing wrong, and refuses connections (ADR-061).
 
+**A port may declare a fixed `container_port`, for the one case neither of those covers**
+(ADR-150): an off-the-shelf image with no seed-controllable way to change what it listens on at
+all, not through the command and not through an env var. Adminer's own standalone server always
+binds 8080 regardless of what host port it is published under — the case a database-admin addon
+(ADR-147) needs this for. `container_port` publishes the allocated host port to that fixed
+number instead of to itself; unset, the ordinary rule above still applies. Found live: a real
+FiveM server's Adminer addon showed as `running` and reachable per the container list, yet every
+connection was refused, because the allocated host port was being published to itself and
+nothing inside the container was listening there — the same silent failure shape ADR-061
+describes, one layer further down the stack, where an image gives the seed no lever to pull at
+all rather than the wrong one.
+
 **Job** — a long-running operation with streamed progress: install, install update, backup,
 restore, server move, agent update. One mechanism rather than six (ADR-021).
 
