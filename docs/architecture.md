@@ -1415,7 +1415,13 @@ among several; the tab appears only while that container is currently enabled. `
 allocated port, resolved fresh on every request. Proxying rather than linking directly to the
 node's address is deliberate: a direct link breaks in an iframe the moment the operator reaches the
 UI through the Cloudflare tunnel (mixed content, HTTPS parent page and bare HTTP target), where a
-same-origin proxy does not.
+same-origin proxy does not. The proxy strips an addon's own `X-Frame-Options` and any CSP
+`frame-ancestors` directive from its response (ADR-151) — a real backend refusing to be framed by
+default (Adminer's own `X-Frame-Options: deny`) would otherwise defeat the one thing this route
+exists for, since being embedded in this page's iframe is not incidental here, it is the point.
+A published port whose image cannot be told what to bind to at all may also need
+`container_port` (ADR-150) to be reachable in the first place — Adminer's own standalone server
+always listens on a fixed 8080 regardless of the host port it is allocated.
 
 **A port declares what it is for** (`kind: game|query|rcon|web|voice|other`), and a seed may
 declare a **connect** block — a URI a client understands, an address to copy, or both. It is
