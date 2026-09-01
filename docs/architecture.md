@@ -1408,11 +1408,14 @@ no template may reference one's port.
 
 **A container's own web UI can get its own tab, proxied rather than linked to directly**
 (`containers[].ui`, ADR-147) — the case a database admin tool beside a bundled database exists
-for. At most one container per seed may declare it, so a server's tab strip never has to choose
-among several; the tab appears only while that container is currently enabled. `GET
-/servers/{id}/addon` is the ordinary tab chrome around an iframe, and
-`/servers/{id}/addon/proxy/...` is where `yggd` itself reverse-proxies to the container's node and
-allocated port, resolved fresh on every request. Proxying rather than linking directly to the
+for. Any number of containers may declare one (ADR-154) — a Director control panel and a database
+manager beside it, say — each identified by its own container `Role`, which is already guaranteed
+unique within a seed; the only constraint left is that two tabs may not share a `ui.tab` label, so
+the strip never shows two indistinguishable entries. Each tab appears only while its container is
+currently enabled. `GET /servers/{id}/addon/{role}` is the ordinary tab chrome around an iframe for
+one addon, and `/servers/{id}/addon/{role}/proxy/...` is where `yggd` itself reverse-proxies to
+that container's node and allocated port, resolved fresh on every request. Proxying rather than
+linking directly to the
 node's address is deliberate: a direct link breaks in an iframe the moment the operator reaches the
 UI through the Cloudflare tunnel (mixed content, HTTPS parent page and bare HTTP target), where a
 same-origin proxy does not. The proxy strips an addon's own `X-Frame-Options` and any CSP
