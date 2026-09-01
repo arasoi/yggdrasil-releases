@@ -334,13 +334,17 @@ type Runtime interface {
     Adopt(ctx context.Context) ([]PodStatus, error)         // rebuild state from labels (ADR-012)
     Events(ctx context.Context) (<-chan Event, error)       // exit watching beats polling
     ReapOrphans(ctx context.Context) (OrphanReport, error)  // startup leftover sweep (ADR-088)
+    LoadImage(ctx context.Context, tarPath string) (ref string, err error)  // op: load_image (ADR-155)
 }
 ```
 
 `Start` and `Stop` take the full `PodSpec` rather than an id, because after an agent restart
 container labels carry identity only, never configuration (ADR-012) — the dependency graph
-must arrive fresh on every call. The three widenings past the original lifecycle set each
-carry their own ADR: `Exec` (ADR-042), `RunOnce` (ADR-057), `ReapOrphans` (ADR-088).
+must arrive fresh on every call. The four widenings past the original lifecycle set each
+carry their own ADR: `Exec` (ADR-042), `RunOnce` (ADR-057), `ReapOrphans` (ADR-088), `LoadImage`
+(ADR-155). `RunOnce`, `ReapOrphans` and `LoadImage` are, like `Adopt`, not addressed by server
+id at all — what each acts on is not one pod: a throwaway container, the node's own runtime
+leftovers, and the node's own image store, respectively.
 
 `PodSpec` carries one or more `ContainerSpec` entries, their dependency edges, mounts, and
 allocations. Console attach and stats are role-addressed because a pod has more than one
@@ -1322,10 +1326,33 @@ backup:
 exactly two installs — a game needing fetch-then-extract-then-chmod had none. Arbitrary shell
 was rejected (it would make a seed code, and no form can generate it), so the ops are a fixed
 vocabulary: `download`, `extract`, `steamcmd`, `mkdir`, `copy`, `move`, `chmod`, `write`,
-`patch`, plus three reserved lifecycle ops for a game that must boot once to write its own
-config. `install.image` is required exactly when a step needs a container and forbidden
-otherwise, and a shared install may not reference per-server data at all — it is mounted
-read-only by every server referencing it.
+`patch`, `load_image`, plus three reserved lifecycle ops for a game that must boot once to
+write its own config. `install.image` is required exactly when a step needs a container and
+forbidden otherwise, and a shared install may not reference per-server data at all — it is
+mounted read-only by every server referencing it.
+
+**`load_image` imports a container image from a tar archive already in the install directory
+into the node's local image store, never a registry** (ADR-155). It exists for a game whose
+distribution bundles its own container images rather than publishing them anywhere reachable —
+Dune Awakening's is the case that found it: every core service's image lives under
+`registry.funcom.com/...`, and that registry does not resolve in public DNS at all, confirmed
+live by pulling the game's own SteamCMD depot and finding real `docker save` tarballs inside
+it. `install.image` is *not* required for it (`NeedsImage()` is false, unlike `steamcmd`):
+loading a tar into the runtime's own image store is a direct call against the node's container
+daemon (`Runtime.LoadImage`), not something that runs inside a helper container. A container
+declares it consumes such an image with `image: {ref: "...", loaded: true}` — `loaded` is
+mutually exclusive with `base`, since a loaded image is never this project's own published
+library. The agent never attempts to pull a loaded image, under any circumstance: `ensureImage`
+gains a dedicated branch that checks local presence only and fails loudly, naming the install,
+rather than routing through the ordinary refresh-then-fallback-to-cache path built for a
+registry that is normally reachable and occasionally isn't (ADR-071) — reusing that path here
+would mean paying a real DNS-failure cost on every provision against a hostname that will never
+answer, and worse, hanging unbounded on a genuinely missing image, since the ordinary path's
+*first* pull (nothing cached yet) has no fallback and no bound of its own. Reaching the agent
+needed a real wire field, `ContainerSpec.image_loaded_only` (protocol 13) — the op itself needed
+none, since `op` and `from` were already generic fields an agent on any protocol since 2 already
+carries; an agent that predates the op simply refuses it loudly rather than misinterpreting
+anything.
 
 The list travels to the agent on `InstallStart` and `internal/agent/install` executes it. Two
 things deliberately do **not** travel, for the same reason: a step's `if` is evaluated by the
@@ -1334,12 +1361,14 @@ control plane — so the agent still needs no access to a seed's variables or to
 channel (ADR-012). The old `method`/`url`/`archive`/`filename`/`app_id` fields are still written
 alongside the steps, so a protocol 1 agent installs exactly as it did; that work
 took the negotiated protocol to 2 (ADR-014's N-1 window, which until then had no real history to
-mean anything against), and later additive bumps have since taken it to 12 — the log viewer
+mean anything against), and later additive bumps have since taken it to 13 — the log viewer
 (ADR-082), `ReclaimData` (ADR-088), managed config writes (ADR-092), cluster file operations
 (ADR-105), the destroy confirmation (ADR-107), a per-step SteamCMD depot-bitness override
 (ADR-121), a per-step SteamCMD depot-platform-OS override (ADR-123), a node's own free-disk
-figure on every heartbeat (ADR-134), the install force-clean escape hatch (ADR-142), and the
-Files page's zip-extract option (ADR-146).
+figure on every heartbeat (ADR-134), the install force-clean escape hatch (ADR-142), the
+Files page's zip-extract option (ADR-146), and a container's image being sourced from an
+install step rather than a registry (ADR-155). `op: load_image` itself, unlike every one of
+those, needed no bump at all — it reuses wire fields already generic since protocol 2.
 `internal/configfile` is the shared key-patching implementation behind both
 the `patch` step and a config file managed `patch`, so a key path means the same thing at
 install time and at provision time.
