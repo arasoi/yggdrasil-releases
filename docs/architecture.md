@@ -371,17 +371,35 @@ containers declaring ports publish to the host. A shared network namespace was c
 rejected — it prevents restarting a sidecar without the primary and turns sidecar port
 collisions into an operator problem (ADR-019).
 
-**Start order.** Containers declare `depends_on` with a `started` or `healthy` condition, plus
-an optional healthcheck. The agent starts in topological order, waiting on health gates, and
-fails the pod with a clear reason on timeout rather than letting the game crash-loop against
-an unready database.
+**Start order.** Containers declare `depends_on` with a `started`, `healthy`, or `completed`
+condition, plus an optional healthcheck. The agent starts in topological order, waiting on
+health gates, and fails the pod with a clear reason on timeout rather than letting the game
+crash-loop against an unready database.
+
+**A container can run to completion instead of staying up** (`once: true`, ADR-156) — a
+database schema tool, not a persistent service. It is re-run on every `Start`, including a
+primary's own crash-loop restart, which calls the full `Start` rather than restarting one
+container in place — not merely the first time the pod is ever provisioned, so it must be
+idempotent by its own nature. A dependent gates on it finishing, rather than merely starting
+or becoming healthy, with `depends_on`'s `completed` condition; unlike `healthy`, which is
+accepted against a target with no healthcheck at all and simply times out, `completed` is
+validated strictly — its target must declare `once: true`, since waiting for an ordinary
+persistent container to "complete" is never something a seed author could have meant. `once`
+may not be combined with `primary`: a clean primary exit already ends the server, so a
+one-shot primary would not sit correctly exited the way a one-shot sidecar does.
 
 **Stop order is the reverse**, and gets the primary first: graceful-stop the game so it
 flushes its writes, *then* tear down the database. The opposite order loses saves.
 
 **Sidecar failure.** A crashed sidecar is restarted with backoff. Exceeding the crash-loop
 threshold puts the pod in `degraded` — the primary may still be running, but the server is
-not healthy, and that is operationally distinct from both `running` and `crashed`.
+not healthy, and that is operationally distinct from both `running` and `crashed`. **A `once`
+container's clean exit is exempted from all of this** — it is success, not a crash, and must
+never degrade the server for having happened; a non-zero exit is not exempted; it retries and
+eventually degrades exactly like any other sidecar failure (ADR-156). Traced against a real
+bug rather than designed preventively: before this exemption, every sidecar exit — clean or
+not — became the same "sidecar unhealthy" event, and degraded is sticky, so a database schema
+tool succeeding at its one job would have degraded the server permanently.
 
 **Sidecars are observable, not independently controllable** (ADR-022). Their logs and
 resource stats surface in the UI behind a container selector on the console view; they have
