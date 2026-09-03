@@ -1601,7 +1601,7 @@ same second-writer drift ADR-087 removed — so each fixture names the corner it
 | `env-settings` | settings with `env` destinations, the absent/empty/set tri-state, `promote` migrations, and no install block |
 | `file-settings` | config files managed `once` and `always`, `source_path` templates, `show_if`, and the RCON-needs-a-password template guard |
 | `many-groups` | enough groups to cross `varSection`'s tab threshold, every control type, and a JSON config where numbers and booleans must render unquoted |
-| `addons-branding` | an optional addon container, branding files with real image bytes, a `connect` block, a multi-container pod with health gates, volumes, backup hooks, and a `once: true`/`completed` dependency |
+| `addons-branding` | an optional addon container, branding files with real image bytes, a `connect` block, a multi-container pod with health gates, volumes, backup hooks, a `once: true`/`completed` dependency, and two `ui:` tabs — one bare, one with `login.fields` |
 
 A test that needs something none of these declares should add a fixture rather than reach for a
 published seed: a fixture states the property it is there for, where a shipped game states only
