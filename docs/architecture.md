@@ -1131,6 +1131,8 @@ Console, Files, Backups and Settings, and lifecycle controls that stay visible a
 this, those were three unrelated top-level pages reached from a table row, with nothing on
 screen tying them to the server they belonged to. A seed declaring a container UI (ADR-147) adds a
 sixth, conditional tab for that addon's own web interface, proxied rather than linked to directly.
+An Access tab (ADR-159) is conditional the same way, shown only to a server's Owner or a global
+Admin — the tier that can see and manage who else holds a grant on it.
 Overview shows the pod's containers (every
 server is a pod, ADR-017), its allocations joined to the seed declaration that produced them
 so an offset-derived port reads as derived rather than as an unexplained number (ADR-048),
@@ -2159,10 +2161,14 @@ Scope is a homelab: a small set of trusted people, not untrusted tenants.
 - **RBAC** — three global, fleet-wide roles (`Viewer` < `Operator` < `Admin`), enforced by
   `requireRole` alongside the existing `requireAuth`. Admin covers settings, security, updates,
   node management, catalog/publish actions, and user management; Operator covers fleet mutation
-  (server and cluster lifecycle, files, console, backups) and anything that can reveal a secret
-  even as a plain read (a settings form's current values, a config file's contents); everything
-  else needs only an authenticated session. Scoping a role to specific servers or nodes rather
-  than the whole fleet is a deliberately reserved seam, not built.
+  (server and cluster lifecycle, backups, and now settings, console send-input, and file
+  management) and anything that can reveal a secret even as a plain read (a settings form's
+  current values, a config file's contents); everything else needs only an authenticated
+  session. **Per-resource grants layer underneath this** (ADR-159): an Owner, Manager, or
+  Viewer role assignable to a specific server or cluster, for a user whose global role is plain
+  Viewer and would not otherwise reach it at all — Admin and Operator are unaffected, since they
+  already see and can act on everything. See "Per-resource access grants" just below for the
+  full model — this is additive underneath the global roles above, not a replacement for them.
 - **Perimeter** — the UI is reachable only over the LAN or through the Cloudflare tunnel,
   which provides external authentication. `yggd` never binds to a public interface.
 - **Agent auth** — mTLS with certificates from the control plane's internal CA, separate from
@@ -2174,6 +2180,52 @@ Scope is a homelab: a small set of trusted people, not untrusted tenants.
   homelab trust level and would not be for untrusted tenants.
 - **Docker socket access** makes the agent effectively root on its host. Inherent to the
   design and the main thing needing revisiting for untrusted tenants.
+
+### Per-resource access grants
+
+ADR-115 reserved a seam for scoping a role narrower than the whole fleet without building it.
+ADR-159 is that seam, filled: a `resource_grants` table assigning one user an **Owner**,
+**Manager**, or **Viewer** role on one specific server or cluster, layered *underneath* the
+global roles above rather than replacing them. Global Admin and Operator are completely
+unaffected — a grant only matters for a user whose global role is plain Viewer and would not
+otherwise reach that resource at all. Owner is Manager plus deleting or moving the resource plus
+managing its grants; Manager is full operational control (lifecycle, console send-input, files,
+backups, settings); Viewer is read-only — overview/status and console *output*, nothing else.
+
+**A cluster's grant cascades to every member, present and future** — a role on the cluster
+grants that same tier on each of its servers automatically, and a member's own direct grant can
+only add beyond that, never subtract from it. **Visibility is scoped along with access**: a user
+with no grant on a resource, and only global Viewer, sees it nowhere at all — not the fleet
+list, not the cluster list, not the live-update socket (`hub.EventHub.Subscribe` takes an
+optional per-subscriber filter for exactly this, so a hidden server's bare id never crosses the
+wire to a browser that cannot see it).
+
+Enforcement is two separate questions, not one: `visible(user, resource)` — does global role or
+any grant reach this at all — decides 404 versus everything else, and a route's own
+`(min, bypass)` pair decides 403 versus allow once visibility is established. Folding these
+together would give a plain Operator with no personal grant a lying 404 on the Access-management
+routes below, instead of the 403 that correctly says "you can see this everywhere else, you just
+can't do this." Grant management is deliberately **Owner-or-Admin**, a tighter bypass than every
+other Owner-tier action (delete and move stay Owner-or-Operator, unchanged from before this
+existed) — a plain Operator can still delete or move a server they have no personal grant on, but
+cannot touch who else has access to it.
+
+`serverFromPath`/`clusterFromPath` carry the check: both take `(min GrantRole, bypass Role)` and
+resolve access before returning the row, so a route that forgets to declare a tier is a compile
+error rather than a silently-unguarded endpoint. A server's own page gets a sixth, conditional
+Access tab (`serverTabs`, gated on being able to use it); a cluster's Access link joins the
+existing Settings/Files entries in its page's overflow menu.
+
+Creating a server or cluster grants the creator Owner on it immediately, regardless of their
+global role — creation itself stays Operator-or-above fleet-wide, since there is no resource yet
+for a Viewer's own grant to attach to. Zero owners is allowed; Admin is always the fallback, so
+there is no "last owner" guard the way there is for the last admin account. A grant only ever
+targets an existing account — granting access to someone not yet invited means inviting them at
+`/users` first.
+
+`/allocations`, `/players`, `/jobs`, and `/installs` are **not** scoped by any of this and stay
+visible fleet-wide to any authenticated user, a stated limitation rather than a silent gap.
+Nodes, seeds, and installs carry no per-resource grant model at all.
 
 ## External dependencies
 
