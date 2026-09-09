@@ -2158,6 +2158,24 @@ Scope is a homelab: a small set of trusted people, not untrusted tenants.
   `/users`, naming a role but not a person; whoever redeems that link, through whichever
   provider they choose, is who the account belongs to (ADR-115's amendment). `api_tokens`
   remains dead schema, unused since the first migration.
+- **Self-service profile** — every account manages its own display name, email (a plain
+  contact field; this project has no outbound email capability, so nothing here is verified
+  or ever emailed), and local password from `/profile`, gated by `requireAuth` alone since it
+  never reaches anyone else's account (ADR-160). An OIDC-only account can set a real password
+  here too — the per-account analogue of federated login staying strictly additive above: one
+  unreachable provider should not strand the person who signed in through it, any more than a
+  misconfigured provider should strand everyone else. `/profile` is also where a second
+  provider is linked to an already-existing account (ADR-115's amendment named this as
+  explicitly not built; ADR-160 built it) — a single-use, server-verified link token rides a
+  cookie across the provider redirect, since the account requesting the link cannot safely
+  travel as a plain, browser-editable cookie value the way a join code's chosen username can
+  (the code itself, not the account id, is what a join cookie trusts). Removing an account's
+  own last way to sign in is refused, mirroring the last-admin guard's transactional
+  check-then-act shape. A changed password signs out every other session for that account
+  (`Store.DeleteUserSessions`, another piece of infrastructure that predates this feature with
+  nobody calling it) and immediately reissues one for the browser that made the change, so a
+  password changed because a session might be compromised actually cuts that session off
+  without also logging out whoever just typed their own new password correctly.
 - **RBAC** — three global, fleet-wide roles (`Viewer` < `Operator` < `Admin`), enforced by
   `requireRole` alongside the existing `requireAuth`. Admin covers settings, security, updates,
   node management, catalog/publish actions, and user management; Operator covers fleet mutation
