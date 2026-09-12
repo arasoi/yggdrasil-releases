@@ -2204,12 +2204,15 @@ Scope is a homelab: a small set of trusted people, not untrusted tenants.
   always had, now expressed as permission sets rather than hardcoded enums. Admin holds every
   permission; Operator holds everything except user/role/settings/security/updates/node
   administration and the two access-management permissions; a plain global Viewer holds nothing
-  at all without a resource-scoped assignment. A built-in role can be renamed and have its
-  permissions changed from `/roles` exactly like a custom one — the last-`users.manage`-holder
-  invariant below is what actually protects the property a blanket lock originally existed for,
-  so the lock itself was redundant with it (ADR-163) — but a built-in role can never be
-  *deleted*, since its `Slug` (not its name) is what account bootstrap, invite redemption, and
-  this migration's own backfill look it up by. Any number of **custom roles** can be created
+  at all without a resource-scoped assignment. Four of the five other built-ins (Operator,
+  Viewer at both scopes, Manager, Owner) can be renamed and have their permissions changed from
+  `/roles` exactly like a custom one — the last-`users.manage`-holder invariant below is what
+  actually protects the property a blanket lock originally existed for (ADR-163) — but **Admin
+  stays view-only** (ADR-165): it is the one role every account-bootstrap and federated-join
+  path assumes exists holding its full, unmodified permission set, and keeping exactly one role
+  permanently fixed is a stronger guarantee than relying on the invariant alone. No built-in role
+  can ever be *deleted*, since its `Slug` (not its name) is what account bootstrap, invite
+  redemption, and this migration's own backfill look it up by. Any number of **custom roles** can be created
   from `/roles` (gated on `roles.manage`), each a checkbox-selected subset of the same catalog,
   fully editable and deletable (refused while still assigned to anyone). Each role has its own
   read-only view page, `/roles/{id}` — what a row's own click leads to, editing reached from an
