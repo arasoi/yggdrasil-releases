@@ -273,7 +273,7 @@ User=yggdrasil
 Group=yggdrasil
 ExecStart=/var/lib/yggdrasil/bin/yggd --config /etc/yggdrasil/yggd.yaml
 Restart=always
-RestartSec=2
+RestartSec=250ms
 AmbientCapabilities=
 NoNewPrivileges=true
 
