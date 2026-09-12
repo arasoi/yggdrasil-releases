@@ -1124,15 +1124,29 @@ HTTP handlers as the rest of the UI, bounded to 64 MiB per upload.
 
 The UI is a fixed left nav rail — grouped Fleet / Library / Infrastructure / System, so the
 destination count can keep growing — beside an inset content pane with a slim context bar
-(ADR-054). It replaced a horizontal tab bar that nine destinations had already outgrown.
+(ADR-054). It replaced a horizontal tab bar that nine destinations had already outgrown. The
+System group's six destinations (Security, Users, Roles, Logs, Updates, Settings) are each
+individually conditional on the specific permission their route needs (ADR-161) — a viewer
+without `security.manage` simply never sees the Security link, rather than seeing it and then
+hitting a 403. Every other rail item stays unconditional, since none of them were gated before
+and nobody asked to newly restrict them.
 
 **Every server has a page** at `/servers/{id}`: a breadcrumb, a tab strip shared by Overview,
 Console, Files, Backups and Settings, and lifecycle controls that stay visible across all five. Before
 this, those were three unrelated top-level pages reached from a table row, with nothing on
-screen tying them to the server they belonged to. A seed declaring a container UI (ADR-147) adds a
-sixth, conditional tab for that addon's own web interface, proxied rather than linked to directly.
-An Access tab (ADR-159) is conditional the same way, shown only to a server's Owner or a global
-Admin — the tier that can see and manage who else holds a grant on it.
+screen tying them to the server they belonged to. Each of those five tabs is itself individually
+permission-gated (ADR-162), not only the buttons reached from them: Overview and Console share
+`servers.view`, and Files/Backups/Settings each need their own `manage_*` permission — a role
+holding only `servers.manage_backups` sees just Overview, Console and Backups, never a Files or
+Settings tab that would 403 the moment it was clicked. A seed declaring a container UI (ADR-147)
+adds a sixth, conditional tab for that addon's own web interface, proxied rather than linked to
+directly. An Access tab is conditional the same way, shown only to a server's Owner or a global
+Admin — the tier that can see and manage who else holds an assignment on it (ADR-159, generalized
+by ADR-161).
+The lifecycle buttons and overflow-menu entries on this page and on each fleet card are
+themselves individually conditional on the specific permission each one needs (ADR-161) — a
+viewer who cannot delete a server never sees a Delete button to click, rather than seeing one
+that 403s.
 Overview shows the pod's containers (every
 server is a pod, ADR-017), its allocations joined to the seed declaration that produced them
 so an offset-derived port reads as derived rather than as an unexplained number (ADR-048),
@@ -1186,6 +1200,10 @@ servers become groups. Creating a server is one **New server** button that opens
 or from a container image — and lands on the page for whichever was picked (`/servers/new-from-seed`
 or `/servers/new-from-image`); the image form used to sit permanently expanded at the bottom
 of the list, which put a form nobody was filling in below every server they were looking at.
+The button and both chooser destinations are gated on `servers.create` (ADR-162) — a role
+lacking it sees neither the button nor its dialog, and a direct visit to either destination
+route is refused rather than rendering a form that could only ever 403 on submit. `/clusters`'
+own **New cluster** button and `/clusters/new` are gated on `clusters.create` the same way.
 See ADR-054's amendment.
 
 **Each group is a grid of art cards** (ADR-080): a seed's own banner, its state as a chip on the
@@ -2176,17 +2194,22 @@ Scope is a homelab: a small set of trusted people, not untrusted tenants.
   nobody calling it) and immediately reissues one for the browser that made the change, so a
   password changed because a session might be compromised actually cuts that session off
   without also logging out whoever just typed their own new password correctly.
-- **RBAC** — three global, fleet-wide roles (`Viewer` < `Operator` < `Admin`), enforced by
-  `requireRole` alongside the existing `requireAuth`. Admin covers settings, security, updates,
-  node management, catalog/publish actions, and user management; Operator covers fleet mutation
-  (server and cluster lifecycle, backups, and now settings, console send-input, and file
-  management) and anything that can reveal a secret even as a plain read (a settings form's
-  current values, a config file's contents); everything else needs only an authenticated
-  session. **Per-resource grants layer underneath this** (ADR-159): an Owner, Manager, or
-  Viewer role assignable to a specific server or cluster, for a user whose global role is plain
-  Viewer and would not otherwise reach it at all — Admin and Operator are unaffected, since they
-  already see and can act on everything. See "Per-resource access grants" just below for the
-  full model — this is additive underneath the global roles above, not a replacement for them.
+- **RBAC** — a unified roles-and-permissions model (ADR-161, superseding the two separate fixed
+  tier systems ADR-115 and ADR-159 originally built): a role is a named set of fine-grained
+  permissions from a fixed catalog (`internal/control/rbac`), not a rank on a ladder. A role's
+  `kind` decides how it is used — `global` (one per user, fleet-wide, enforced by
+  `requirePermission` alongside the existing `requireAuth`) or `resource` (per server or
+  cluster). Six built-in roles are seeded and locked (fixed permissions, cannot be edited or
+  deleted): **Admin**, **Operator**, **Viewer** at global scope, and **Owner**, **Manager**,
+  **Viewer** at resource scope — the same six tiers this project always had, now expressed as
+  permission sets rather than hardcoded enums. Admin holds every permission; Operator holds
+  everything except user/role/settings/security/updates/node administration and the two
+  access-management permissions; a plain global Viewer holds nothing at all without a
+  resource-scoped assignment. Any number of **custom roles** can be created from `/roles`
+  (gated on `roles.manage`), each a checkbox-selected subset of the same catalog, fully
+  editable and deletable (refused while still assigned to anyone). See "Per-resource access
+  grants" just below for the resource-scoped half of this in full — it is additive underneath
+  a user's global role, not a replacement for it.
 - **Perimeter** — the UI is reachable only over the LAN or through the Cloudflare tunnel,
   which provides external authentication. `yggd` never binds to a public interface.
 - **Agent auth** — mTLS with certificates from the control plane's internal CA, separate from
@@ -2201,49 +2224,59 @@ Scope is a homelab: a small set of trusted people, not untrusted tenants.
 
 ### Per-resource access grants
 
-ADR-115 reserved a seam for scoping a role narrower than the whole fleet without building it.
-ADR-159 is that seam, filled: a `resource_grants` table assigning one user an **Owner**,
-**Manager**, or **Viewer** role on one specific server or cluster, layered *underneath* the
-global roles above rather than replacing them. Global Admin and Operator are completely
-unaffected — a grant only matters for a user whose global role is plain Viewer and would not
-otherwise reach that resource at all. Owner is Manager plus deleting or moving the resource plus
-managing its grants; Manager is full operational control (lifecycle, console send-input, files,
-backups, settings); Viewer is read-only — overview/status and console *output*, nothing else.
+ADR-115 reserved a seam for scoping access narrower than the whole fleet without building it;
+ADR-159 filled that seam with a fixed Owner/Manager/Viewer tier; ADR-161 replaced the tier with
+the same unified role model the global side uses — a `resource_role_assignments` table assigning
+one user a **role of kind `resource`** on one specific server or cluster, layered *underneath* a
+user's global role rather than replacing it. Global Admin and Operator are unaffected by any
+assignment — one only matters for a user whose global role would not otherwise reach that
+resource at all. The built-in resource roles keep ADR-159's exact three-tier shape: Owner is
+Manager plus deleting or moving the resource plus managing its access; Manager is full
+operational control (lifecycle, console send-input, files, backups, settings); Viewer is
+read-only — overview/status and console *output*, nothing else. A custom resource-kind role can
+express anything narrower — "can manage backups and nothing else" has no equivalent in the old
+fixed enum.
 
-**A cluster's grant cascades to every member, present and future** — a role on the cluster
-grants that same tier on each of its servers automatically, and a member's own direct grant can
-only add beyond that, never subtract from it. **Visibility is scoped along with access**: a user
-with no grant on a resource, and only global Viewer, sees it nowhere at all — not the fleet
-list, not the cluster list, not the live-update socket (`hub.EventHub.Subscribe` takes an
-optional per-subscriber filter for exactly this, so a hidden server's bare id never crosses the
-wire to a browser that cannot see it).
+**A cluster's assignment cascades to every member, present and future** — a role on the cluster
+grants that same permission set on each of its servers automatically, and a member's own direct
+assignment can only add beyond that, never subtract from it. Resolving the cascade is a set
+union of the two permission sets, not a rank comparison: arbitrary custom roles have no total
+order to compare the way the old fixed tiers did, and union preserves the "cascade only adds"
+property automatically. **Visibility is scoped along with access**: a user with no assignment on
+a resource, and a global role with no fleet-wide view permission, sees it nowhere at all — not
+the fleet list, not the cluster list, not the live-update socket (`hub.EventHub.Subscribe` takes
+an optional per-subscriber filter for exactly this, so a hidden server's bare id never crosses
+the wire to a browser that cannot see it).
 
-Enforcement is two separate questions, not one: `visible(user, resource)` — does global role or
-any grant reach this at all — decides 404 versus everything else, and a route's own
-`(min, bypass)` pair decides 403 versus allow once visibility is established. Folding these
-together would give a plain Operator with no personal grant a lying 404 on the Access-management
-routes below, instead of the 403 that correctly says "you can see this everywhere else, you just
-can't do this." Grant management is deliberately **Owner-or-Admin**, a tighter bypass than every
-other Owner-tier action (delete and move stay Owner-or-Operator, unchanged from before this
-existed) — a plain Operator can still delete or move a server they have no personal grant on, but
-cannot touch who else has access to it.
+Enforcement is two separate questions, not one: `visible(user, resource)` — does the global role
+hold `servers.view`/`clusters.view`, or does any assignment reach this at all — decides 404
+versus everything else, and whether the user holds the *specific* permission the route needs
+decides 403 versus allow once visibility is established. Folding these together would give a
+plain Operator with no personal assignment a lying 404 on the Access-management routes below,
+instead of the 403 that correctly says "you can see this everywhere else, you just can't do
+this." Access management itself needs `servers.manage_access`/`clusters.manage_access` — a
+permission only built-in Owner and Admin's global role hold by default, deliberately tighter than
+ordinary Owner-tier actions like delete and move, which stay reachable by a plain Operator with
+no personal assignment.
 
-`serverFromPath`/`clusterFromPath` carry the check: both take `(min GrantRole, bypass Role)` and
-resolve access before returning the row, so a route that forgets to declare a tier is a compile
+`serverFromPath`/`clusterFromPath` carry the check: both take a single permission string and
+resolve access before returning the row, so a route that forgets to declare one is a compile
 error rather than a silently-unguarded endpoint. A server's own page gets a sixth, conditional
 Access tab (`serverTabs`, gated on being able to use it); a cluster's Access link joins the
-existing Settings/Files entries in its page's overflow menu.
+existing Settings/Files entries in its page's overflow menu, each entry itself now conditional
+on the specific permission it needs (ADR-161's UI audit) rather than always rendering.
 
-Creating a server or cluster grants the creator Owner on it immediately, regardless of their
-global role — creation itself stays Operator-or-above fleet-wide, since there is no resource yet
-for a Viewer's own grant to attach to. Zero owners is allowed; Admin is always the fallback, so
-there is no "last owner" guard the way there is for the last admin account. A grant only ever
+Creating a server or cluster assigns the creator the built-in Owner role on it immediately,
+regardless of their global role — creation itself stays gated on `servers.create`/
+`clusters.create` fleet-wide, since there is no resource yet for a Viewer's own assignment to
+attach to. Zero owners is allowed; Admin is always the fallback, so there is no "last owner"
+guard the way there is for the last account able to manage users. An assignment only ever
 targets an existing account — granting access to someone not yet invited means inviting them at
 `/users` first.
 
 `/allocations`, `/players`, `/jobs`, and `/installs` are **not** scoped by any of this and stay
 visible fleet-wide to any authenticated user, a stated limitation rather than a silent gap.
-Nodes, seeds, and installs carry no per-resource grant model at all.
+Nodes, seeds, and installs carry no per-resource role model at all.
 
 ## External dependencies
 
