@@ -2199,17 +2199,21 @@ Scope is a homelab: a small set of trusted people, not untrusted tenants.
   permissions from a fixed catalog (`internal/control/rbac`), not a rank on a ladder. A role's
   `kind` decides how it is used — `global` (one per user, fleet-wide, enforced by
   `requirePermission` alongside the existing `requireAuth`) or `resource` (per server or
-  cluster). Six built-in roles are seeded and locked (fixed permissions, cannot be edited or
-  deleted): **Admin**, **Operator**, **Viewer** at global scope, and **Owner**, **Manager**,
-  **Viewer** at resource scope — the same six tiers this project always had, now expressed as
-  permission sets rather than hardcoded enums. Admin holds every permission; Operator holds
-  everything except user/role/settings/security/updates/node administration and the two
-  access-management permissions; a plain global Viewer holds nothing at all without a
-  resource-scoped assignment. Any number of **custom roles** can be created from `/roles`
-  (gated on `roles.manage`), each a checkbox-selected subset of the same catalog, fully
-  editable and deletable (refused while still assigned to anyone). See "Per-resource access
-  grants" just below for the resource-scoped half of this in full — it is additive underneath
-  a user's global role, not a replacement for it.
+  cluster). Six built-in roles are seeded: **Admin**, **Operator**, **Viewer** at global scope,
+  and **Owner**, **Manager**, **Viewer** at resource scope — the same six tiers this project
+  always had, now expressed as permission sets rather than hardcoded enums. Admin holds every
+  permission; Operator holds everything except user/role/settings/security/updates/node
+  administration and the two access-management permissions; a plain global Viewer holds nothing
+  at all without a resource-scoped assignment. A built-in role can be renamed and have its
+  permissions changed from `/roles` exactly like a custom one — the last-`users.manage`-holder
+  invariant below is what actually protects the property a blanket lock originally existed for,
+  so the lock itself was redundant with it (ADR-163) — but a built-in role can never be
+  *deleted*, since its `Slug` (not its name) is what account bootstrap, invite redemption, and
+  this migration's own backfill look it up by. Any number of **custom roles** can be created
+  from `/roles` (gated on `roles.manage`), each a checkbox-selected subset of the same catalog,
+  fully editable and deletable (refused while still assigned to anyone). See "Per-resource
+  access grants" just below for the resource-scoped half of this in full — it is additive
+  underneath a user's global role, not a replacement for it.
 - **Perimeter** — the UI is reachable only over the LAN or through the Cloudflare tunnel,
   which provides external authentication. `yggd` never binds to a public interface.
 - **Agent auth** — mTLS with certificates from the control plane's internal CA, separate from
