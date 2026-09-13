@@ -2174,8 +2174,12 @@ Scope is a homelab: a small set of trusted people, not untrusted tenants.
   can never lock every operator out. A new account is never created just because someone can
   authenticate to one of those providers — an admin must first create a one-time join code at
   `/users`, naming a role but not a person; whoever redeems that link, through whichever
-  provider they choose, is who the account belongs to (ADR-115's amendment). `api_tokens`
-  remains dead schema, unused since the first migration.
+  provider they choose, is who the account belongs to (ADR-115's amendment). An admin can also
+  create a local account directly from the same page — username, a password the admin types in,
+  and a role, no join code and no OIDC round trip — for a login that will never touch a
+  federated provider at all; the account is forced to set its own password before reaching
+  anything else (`User.MustChangePassword`, ADR-167 — see "Self-service profile" just below).
+  `api_tokens` remains dead schema, unused since the first migration.
 - **Self-service profile** — every account manages its own display name, email (a plain
   contact field; this project has no outbound email capability, so nothing here is verified
   or ever emailed), and local password from `/profile`, gated by `requireAuth` alone since it
@@ -2193,7 +2197,20 @@ Scope is a homelab: a small set of trusted people, not untrusted tenants.
   (`Store.DeleteUserSessions`, another piece of infrastructure that predates this feature with
   nobody calling it) and immediately reissues one for the browser that made the change, so a
   password changed because a session might be compromised actually cuts that session off
-  without also logging out whoever just typed their own new password correctly.
+  without also logging out whoever just typed their own new password correctly. An account an
+  admin created directly (`MustChangePassword`) is confined to `/profile` by `requireAuth`
+  itself — every other route redirects there, including this same account's own display-name and
+  identity-linking actions — until it replaces the admin-typed password with one of its own,
+  which `UpdateUserPassword` clears unconditionally the moment it happens (ADR-167). No special
+  casing was needed in the change-password handler itself: it already asks for the current
+  password whenever `HasPassword` is true, so confirming the admin-typed password before
+  replacing it falls out for free.
+- **Who's signed in** — `/users` also lists every account holding at least one still-valid
+  session, newest sign-in first (`Store.ListSignedInUsers`, ADR-167). Sessions record only when
+  they were issued and when they expire, never a last-active time, so this means "holds a
+  session that has not yet lapsed," not "has a browser tab open right now" — an account that
+  signed in three weeks ago and never returned still reads as signed in until that 30-day
+  session (`auth.sessionLifetime`) runs out.
 - **RBAC** — a unified roles-and-permissions model (ADR-161, superseding the two separate fixed
   tier systems ADR-115 and ADR-159 originally built): a role is a named set of fine-grained
   permissions from a fixed catalog (`internal/control/rbac`), not a rank on a ladder. A role's
