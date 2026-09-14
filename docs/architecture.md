@@ -1128,8 +1128,13 @@ destination count can keep growing — beside an inset content pane with a slim 
 System group's six destinations (Security, Users, Roles, Logs, Updates, Settings) are each
 individually conditional on the specific permission their route needs (ADR-161) — a viewer
 without `security.manage` simply never sees the Security link, rather than seeing it and then
-hitting a 403. Every other rail item stays unconditional, since none of them were gated before
-and nobody asked to newly restrict them.
+hitting a 403. **Library's and Infrastructure's four destinations (Seeds, Installs, Nodes,
+Allocations) are conditional the same way** (ADR-168): each needs its own new `*.view`
+permission, which the built-in Admin and Operator roles both hold (unchanged from what either
+could already do) and the built-in global Viewer role does not (it already held zero
+permissions, and still does) — so a plain Viewer's rail is scoped to Fleet alone. Fleet's own
+four destinations (Servers, Clusters, Players, Jobs) stay unconditional, since a Viewer must
+still see them and nobody asked to restrict anything further.
 
 **Every server has a page** at `/servers/{id}`: a breadcrumb, a tab strip shared by Overview,
 Console, Files, Backups and Settings, and lifecycle controls that stay visible across all five. Before
@@ -2303,9 +2308,12 @@ guard the way there is for the last account able to manage users. An assignment 
 targets an existing account — granting access to someone not yet invited means inviting them at
 `/users` first.
 
-`/allocations`, `/players`, `/jobs`, and `/installs` are **not** scoped by any of this and stay
-visible fleet-wide to any authenticated user, a stated limitation rather than a silent gap.
-Nodes, seeds, and installs carry no per-resource role model at all.
+`/allocations`, `/players`, `/jobs`, and `/installs` are **not** scoped by any of this — none of
+the four can be narrowed to specific nodes, installs, or jobs the way a server or cluster can be,
+a stated limitation rather than a silent gap. Nodes, seeds, and installs carry no per-resource
+role model at all. `/allocations` and `/installs` do still need their own fleet-wide `*.view`
+permission to open at all (ADR-168, "Operator UI shape" above) — `/players` and `/jobs` are the
+two that stay open to any authenticated user regardless of role.
 
 ## External dependencies
 
