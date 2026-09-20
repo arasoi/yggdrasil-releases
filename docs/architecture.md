@@ -207,6 +207,28 @@ escape hatch — was never actually reachable for this case, since `DeleteInstal
 unconditionally while any server still references it (ADR-018); Force clean is what that
 suggestion needed and did not have until now.
 
+**A steamcmd install can be checked for an upstream Steam update, manually or on a schedule, and
+optionally updated automatically** (ADR-171). "Update install" was, until this, a blind trigger —
+it always re-ran SteamCMD's own `app_update ... validate`, with no way to know beforehand whether
+anything would actually be fetched. A new bounded request/reply on the agent control channel
+(`CheckInstallUpdate`, never a `Job`) asks a node to compare two independent, best-effort
+readings: a local read of `appmanifest_<appid>.acf` under the install directory (no container
+needed — it is already on the node's disk), and a throwaway container running steamcmd's own
+`app_info_print` for the "public" branch's upstream buildid (needs the node's real network path,
+unlike seed authoring's host-side Linux-depot check). `internal/control/gameupdate.Checker` — a
+fourth background poller, shaped exactly like the backup scheduler — asks this of every steamcmd
+install on a configurable interval (default 6 hours), records the result, and shows an "Update
+available" badge on `/installs` regardless of whether an operator opted in to anything further.
+An install may additionally be opted into `auto_update`, in which case a detected update is
+applied automatically through the exact same path the manual "Update install" button always
+used — unless a server referencing the install is both running and, per its seed's own
+`join`/`leave` player tracking, currently has someone online, in which case the apply waits and
+is re-evaluated on the next check rather than bouncing an active session. A seed with no player
+tracking at all is not held to that standard — there is no way to know, so it proceeds — an
+explicit tradeoff, not an oversight. Scoped to `steamcmd`-method installs on a non-beta branch;
+`download`/`extract`/`load_image` installs have no seed-declared version concept to check
+against, and a beta branch has no verified way yet to check without risking the wrong build.
+
 **An install job's completion provisions before it restarts anyone waiting on it** (ADR-126).
 `handleInstallProgress`'s success case reconciles (provisions whatever needs it) before restarting
 whoever ADR-106's `AddJobServerRestart` recorded — order that matters when a Rebuild triggered the
@@ -2155,11 +2177,13 @@ surfaced on `/settings` with a link but stay owned by their own pages, since swi
 action rather than a stored value (ADR-056).
 
 The table is key/value; what a key *means* lives in `internal/control/settings` as a registry of
-typed `Definition`s. Nine ship, each with a live consumer: `log.level` (the process's own
+typed `Definition`s. Ten ship, each with a live consumer: `log.level` (the process's own
 `slog.LevelVar`, so debug can be switched on and off without a restart), `stats.retention_days`
 (read by `telemetry.Collector` on every prune), `backups.retention_days` (read by the scheduler's
 archive prune the same way, ADR-088), `nodes.disk_low_percent` (read through `Capacity.DiskLow`,
-ADR-134), `ui.language` (ADR-086), `steam.api_key`, `seeds.catalog_repo` (ADR-081), and the pair
+ADR-134), `ui.language` (ADR-086), `steam.api_key`, `steam.update_check_interval_hours` (read by
+`gameupdate.Checker` on every tick, the same shape as the retention settings above, ADR-171),
+`seeds.catalog_repo` (ADR-081), and the pair
 that lets this control plane publish its own seeds, `seeds.publish_repo` and
 `seeds.publish_token` (ADR-079) — the first credential here that writes outside this deployment,
 which is why its target has no default and the one repository it must never name is refused
