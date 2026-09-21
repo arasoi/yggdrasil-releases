@@ -253,6 +253,26 @@ through the same destroy-and-re-provision path a manual per-server Rebuild alrea
 same player-online check Steam's own auto-apply uses. `/installs` shows the identical column shape
 for both mechanisms, mutually exclusive per install.
 
+**Both mechanisms' badge and action also surface on the server they belong to, not only on
+`/installs`** (ADR-173). A server's own page resolves the same `SteamCMDCheckTarget`/
+`VersionCheckTarget` scope and renders the same "Update available" wording next to its other
+job-status banners (a failed install, a seed that has moved on) — reusing the identical
+`POST /installs/{id}/update`/`.../apply-version-update` routes rather than a server-scoped
+duplicate, with the operator sent back to the server's own page on success
+(`origin=server`+`server_id`, the same convention the Retry-install button already used).
+`Install.UpdateBadgeTitle`/`VersionCheckBadgeTitle` live on `store.Install` itself for this
+reason, so both pages read one string rather than two that could drift.
+
+**An install-update failure naming a SteamCMD app "state 0x6" after the job is a known, specific
+symptom, not a generic error** — SteamCMD writes `StateFlags`/`UpdateResult` 6 into
+`appmanifest_<appid>.acf` on a failed update (a full disk is the common cause, though a
+permissions or connectivity failure produces the identical state) and reads that *stale* state
+back on every later attempt, aborting immediately without even trying a download — so an
+ordinary Retry, which deliberately trusts SteamCMD's own `validate` to reconcile in place
+(ADR-091), cannot recover from it even once the underlying cause is fixed. **Force clean**
+(ADR-142) is the existing, correct recovery: it wipes the directory, poisoned manifest included,
+before the next attempt.
+
 **An install job's completion provisions before it restarts anyone waiting on it** (ADR-126).
 `handleInstallProgress`'s success case reconciles (provisions whatever needs it) before restarting
 whoever ADR-106's `AddJobServerRestart` recorded — order that matters when a Rebuild triggered the
