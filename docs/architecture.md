@@ -215,8 +215,8 @@ anything would actually be fetched. A new bounded request/reply on the agent con
 readings: a local read of `appmanifest_<appid>.acf` under the install directory (no container
 needed — it is already on the node's disk), and a throwaway container running steamcmd's own
 `app_info_print` for the "public" branch's upstream buildid (needs the node's real network path,
-unlike seed authoring's host-side Linux-depot check). `internal/control/gameupdate.Checker` — a
-fourth background poller, shaped exactly like the backup scheduler — asks this of every steamcmd
+unlike seed authoring's host-side Linux-depot check). `internal/control/gameupdate.SteamChecker` —
+a fourth background poller, shaped exactly like the backup scheduler — asks this of every steamcmd
 install on a configurable interval (default 6 hours), records the result, and shows an "Update
 available" badge on `/installs` regardless of whether an operator opted in to anything further.
 An install may additionally be opted into `auto_update`, in which case a detected update is
@@ -228,6 +228,30 @@ tracking at all is not held to that standard — there is no way to know, so it 
 explicit tradeoff, not an oversight. Scoped to `steamcmd`-method installs on a non-beta branch;
 `download`/`extract`/`load_image` installs have no seed-declared version concept to check
 against, and a beta branch has no verified way yet to check without risking the wrong build.
+
+**A `download`/`extract`-method install can declare its own generic way to check for an
+update, since it has no universal API the way SteamCMD gives a steamcmd install** (ADR-172).
+`install.version_check` names a `kind` (`json`, walking a small dotted-path-plus-`[N]`/`[-1]`-index
+expression, or `regex`, a single-capture-group pattern), a `url` templated the same way an install
+step's own is, and an `editable: true` `variable` the extracted value targets — with an optional
+`value` template, rendered with `.CheckValue` holding the raw extraction, for an API whose
+extracted field is only an ingredient rather than a ready value. `web.FetchVersionCheck` runs this
+as a plain outbound HTTPS GET from the control plane itself — unlike Steam's check, nothing here
+needs to run on a node, so this feature added no wire protocol field at all.
+`internal/control/gameupdate.VersionChecker` — a fifth poller, fully independent of
+`SteamChecker`'s own columns and due-list, since `SteamChecker.fire` already touches every install
+on every tick — checks every install declaring `version_check` on its own configurable interval
+(default 12 hours). Unlike Steam's ground-truth manifest read, "installed" here is only the control
+plane's own memory of the last value it applied or first observed: the first check ever run
+against an install establishes that baseline rather than flagging an update, an ordinary check only
+advances the recorded upstream value, and a fetch or parse error leaves both values exactly as they
+were rather than zeroing them, since zeroing a memory-based value would erase something nothing
+else re-derives. Applying a detected update is not a re-run of an install step the way Steam's is —
+it rewrites the declared variable's value on every server referencing the install (in practice
+always exactly one, since `version_check` is refused on a shared install) and rebuilds each one
+through the same destroy-and-re-provision path a manual per-server Rebuild already uses, gated the
+same player-online check Steam's own auto-apply uses. `/installs` shows the identical column shape
+for both mechanisms, mutually exclusive per install.
 
 **An install job's completion provisions before it restarts anyone waiting on it** (ADR-126).
 `handleInstallProgress`'s success case reconciles (provisions whatever needs it) before restarting
@@ -2177,12 +2201,15 @@ surfaced on `/settings` with a link but stay owned by their own pages, since swi
 action rather than a stored value (ADR-056).
 
 The table is key/value; what a key *means* lives in `internal/control/settings` as a registry of
-typed `Definition`s. Ten ship, each with a live consumer: `log.level` (the process's own
+typed `Definition`s. Eleven ship, each with a live consumer: `log.level` (the process's own
 `slog.LevelVar`, so debug can be switched on and off without a restart), `stats.retention_days`
 (read by `telemetry.Collector` on every prune), `backups.retention_days` (read by the scheduler's
 archive prune the same way, ADR-088), `nodes.disk_low_percent` (read through `Capacity.DiskLow`,
 ADR-134), `ui.language` (ADR-086), `steam.api_key`, `steam.update_check_interval_hours` (read by
-`gameupdate.Checker` on every tick, the same shape as the retention settings above, ADR-171),
+`gameupdate.SteamChecker` on every tick, the same shape as the retention settings above, ADR-171),
+`installs.version_check_interval_hours` (read by `gameupdate.VersionChecker` the same way, its own
+independent poller and its own longer default since an arbitrary third-party API has no
+established rate-limit headroom, ADR-172),
 `seeds.catalog_repo` (ADR-081), and the pair
 that lets this control plane publish its own seeds, `seeds.publish_repo` and
 `seeds.publish_token` (ADR-079) — the first credential here that writes outside this deployment,
