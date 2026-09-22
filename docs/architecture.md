@@ -992,14 +992,18 @@ SteamCMD's progress line needed four independent, layered fixes to reach the UI,
 against a real install.
 
 **A line boundary is `\r` as well as `\n`.** SteamCMD redraws its progress line in place with a
-bare `\r` and no `\n` until it moves to the next state. `logscan.Scanner.Feed` held such a line as
-an ever-growing unterminated fragment, eventually dropped at `maxLineBytes` and never matched;
-`internal/agent/install`'s own sibling line assembler for a SteamCMD install job's stdout — a
-second, independent implementation of the same chunk-to-lines problem, needed because an install
-runs before any server exists for `logscan` to key by — held it forever with no bound at all. Both
-now close a line on a bare `\r` exactly as `\n` does, tracking one bit of carried state (`afterCR`)
-so an ordinary CRLF pair split across two reads still collapses to one line rather than producing a
-spurious empty one.
+`\r` until it moves to the next state, rather than only ever a `\n`. `logscan.Scanner.Feed` held
+such a line as an ever-growing unterminated fragment, eventually dropped at `maxLineBytes` and
+never matched; `internal/agent/install`'s own sibling line assembler for a SteamCMD install job's
+stdout — a second, independent implementation of the same chunk-to-lines problem, needed because
+an install runs before any server exists for `logscan` to key by — held it forever with no bound
+at all. Both now close a line on a bare `\r` exactly as `\n` does, tracking one bit of carried
+state (`afterCR`) so an ordinary CRLF pair split across two reads still collapses to one line
+rather than producing a spurious empty one. Live-verified against the current SteamCMD client
+build (`docs/steamcmd.md` §5, both via a direct capture and via the real `RunOnce`/`ContainerLogs`
+path): a redraw actually arrives as `\r\n` on every line, not a bare `\r` with no `\n` as originally
+diagnosed — the fix above handles that CRLF case explicitly and is correct either way, but the
+original "bare `\r`" framing no longer describes what crosses the wire.
 
 **Recognising a redrawn line is not the same as receiving it.** `RunOnce`
 (`internal/agent/runtime/docker`) created the install container with no TTY, and SteamCMD decides
@@ -2424,6 +2428,9 @@ GHCR package must be readable, or mirrored locally and the override pointed at t
 and a *seed's runtime container* for a game that wants SteamCMD available to validate or
 self-update itself at container start. These were separate layers that never met until ADR-057;
 the install path is now the image's primary consumer.
+
+See `docs/steamcmd.md` for the full SteamCMD reference: general command-level mechanics, the
+exact invocation pipeline, the error taxonomy, and an index into the ADRs above.
 
 No message broker, no external cache, no separate reverse proxy. The control plane is one
 binary and one database file.
