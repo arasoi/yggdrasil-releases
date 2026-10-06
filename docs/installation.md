@@ -440,7 +440,9 @@ sudo bash uninstall.sh --role node
 There is no undo. Removing a control plane deletes its SQLite database and
 its `pki/` — the mTLS CA and the binary-signing key — so every enrolled node
 must re-enroll against whatever replaces it. Removing a node deletes that
-node's certificates, and its installs, server state, and local backups. Back
+node's agent directory (`<data-dir>/agent`: its certificates and identity); its
+installs, server state, and local backups are left on disk and are removed only
+by deleting them from the control plane first or by hand. Back
 up `--data-dir` (`/var/lib/yggdrasil` by default) first if you might want
 any of it later. The script asks for confirmation before deleting anything
 unless `-y`/`--yes` is given; `--keep-data` leaves the data directory alone
