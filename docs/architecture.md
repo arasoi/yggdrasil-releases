@@ -62,7 +62,17 @@ could not present a client certificate to the origin). See ADR-011.
 Two consequences for the UI: WebSocket works through the tunnel and carries both console
 output (ADR-032) and live state updates (ADR-058) on two separate sockets, and any long-lived
 HTTP stream needs a keepalive roughly every 20 seconds to survive idle timeouts — both sockets
-ping every 15.
+ping every 15. One account may hold at most 32 sockets open at once across every socket endpoint;
+an upgrade past that is refused with 429 before it is accepted (ADR-179).
+
+What the tunnel forwards is believed only from a trusted peer: `X-Forwarded-Proto` and
+`X-Forwarded-Host` count when they come from `http_trusted_proxies` (loopback by default, the
+same-host cloudflared case) and are stripped from anyone else, so a LAN client cannot claim
+HTTPS or choose the origin an origin check compares against (ADR-180). A connector on another
+host has to be listed there. The client's own address comes from exactly one header,
+`http_client_ip_header` (`X-Forwarded-For`'s rightmost entry by default, or `CF-Connecting-IP`),
+and every other client-address header is stripped even from a trusted peer, since a proxy relays
+whatever of those the browser sent.
 
 Remote agents outside the LAN are not supported in v1. When they are needed, the intended
 path is Cloudflare private network routing or a WireGuard overlay — both transparent at the
@@ -237,7 +247,11 @@ step's own is, and an `editable: true` `variable` the extracted value targets �
 `value` template, rendered with `.CheckValue` holding the raw extraction, for an API whose
 extracted field is only an ingredient rather than a ready value. `web.FetchVersionCheck` runs this
 as a plain outbound HTTPS GET from the control plane itself — unlike Steam's check, nothing here
-needs to run on a node, so this feature added no wire protocol field at all.
+needs to run on a node, so this feature added no wire protocol field at all. The URL is seed
+content, so the fetch goes through `internal/shared/netguard`'s client, which refuses the control
+plane's own host and every IANA special-purpose range at dial time (redirects and DNS rebinding
+included), and its errors name the host only, never the rendered URL that may carry a templated
+secret (ADR-177, ADR-179).
 `internal/control/gameupdate.VersionChecker` — a fifth poller, fully independent of
 `SteamChecker`'s own columns and due-list, since `SteamChecker.fire` already touches every install
 on every tick — checks every install declaring `version_check` on its own configurable interval
@@ -284,6 +298,14 @@ silently with `ErrPodNotFound` and leaving the server `offline` with `Desired` s
 load, so nothing else would have corrected it. Provisioning first closes the race. See
 conventions.md's job-lifecycle rules for the full incident account, including why the fix is a
 no-op for install-update and restore.
+
+**The fleet page's reconcile-on-load is the safety net, and only for whoever can act on a server**
+(ADR-035, ADR-179). Loading `/` or `/servers` still finishes provisioning a server with no
+containers whose install is ready — but only for servers the requester holds `servers.lifecycle`
+on, and never one a rebuild currently holds, since that reconcile writes config files and
+dispatches Provision. A resource-scoped Viewer's page load, and every live re-render of their tab,
+does no node work. The ordinary trigger remains the install job's own success
+(`ReconcileInstall`, ADR-059).
 
 **A server left `Desired: running` survives a host reboot in the database, but nothing brought
 it back until now** (ADR-013, ADR-140). ADR-013 promised this from the day restart authority
@@ -370,6 +392,8 @@ The block above is a node's layout, under the *agent's* `data_dir`. The *control
 ```
 /var/lib/yggdrasil/pki/ca.{crt,key}          # mTLS certificate authority (ADR-028)
 /var/lib/yggdrasil/pki/signing.key           # binary-signing key, a distinct trust role (ADR-040)
+/var/lib/yggdrasil/pki/settings.key          # encrypts secret settings at rest (ADR-181)
+/var/lib/yggdrasil/pki/device.key            # seals sign-in device cookies (ADR-181)
 /var/lib/yggdrasil/agent-binaries/<sha256>/  # signed agent binaries, content-addressed (ADR-040)
 /var/lib/yggdrasil/binary-archive/<channel>  # one saved yggd build per release channel (ADR-056)
 /var/lib/yggdrasil/yggd.db                   # SQLite (ADR-005)
@@ -625,7 +649,10 @@ the bytes itself over a dedicated `DownloadAgentBinary` RPC on the same authenti
 connection (ADR-041 — not a separate HTTP endpoint, since only the gRPC listener is guaranteed
 reachable from a node host), verifies the digest and the control plane's signature against the
 public key pinned at enrollment, writes the new binary alongside the current one, and
-atomically renames it into place. It then drains — stops accepting new lifecycle commands,
+atomically renames it into place. Since protocol 16 the signature it checks binds the digest to
+the version the binary is offered as and to the agent's own architecture
+(`internal/shared/binsig`, ADR-183), made fresh at dispatch; the stored bare-digest signature
+still rides beside it for agents older than that. It then drains — stops accepting new lifecycle commands,
 waits for whatever is already queued to finish, closes its stream cleanly — and exits zero.
 systemd's `Restart=always` brings the process back up; it *reconnects* with its existing
 certificate (no re-enrollment: identity persists on disk across the restart) and adopts its
@@ -686,12 +713,13 @@ since either replaces this running process; the switch itself is written back to
 (`config.SetServerUpdateChannel`) so it survives a restart rather than silently reverting.
 See ADR-056.
 
-A channel's published version comes from that release's own `releases.json` manifest, fetched
-over HTTPS *without* a checksum — release.yml generates `SHA256SUMS` from `release/` before
-writing the manifest into `public-assets/`, so it is not in that file and never has been. That
-is correct for what it is: a version label shown in the UI and recorded alongside a registered
-agent binary, never executed. Every binary is still verified against the published checksum
-before anything is installed or signed.
+A channel's published version comes from that release's own `releases.json` manifest, which is
+not in `SHA256SUMS` — release.yml generates `SHA256SUMS` from `release/` before writing the
+manifest into `public-assets/`. It is a version label, never executed, but it decides which way
+an update is offered and what version a fetched agent binary is registered (and, since ADR-183,
+signed for) under, so it carries its own release signature, checked whenever a release key is
+compiled in. Every binary is still verified against the published checksum before anything is
+installed or signed.
 
 **A release's binaries do not necessarily share one version** (ADR-111): a push rebuilds only
 the binaries it actually affected, and the rest are carried forward byte-identical at the
@@ -706,14 +734,35 @@ their own workflow (`docs-sync.yml`).
 
 Clicking it downloads the matching binary and the release's `SHA256SUMS`, verifies the checksum,
 and atomically replaces the running binary (`internal/control/selfupdate`, the same
-stage-then-rename shape as the agent's own `internal/agent/selfupdate`). There is deliberately no
-second signing key here (ADR-044): the trust level is HTTPS plus a published checksum, exactly
-what an operator was already told to check by hand for a manual update. Once installed, `yggd`
+stage-then-rename shape as the agent's own `internal/agent/selfupdate`). ADR-044 stopped at HTTPS
+plus a published checksum, which proves only that a binary matches what the same release says;
+ADR-183 adds a **publisher signature**: CI signs each release's `SHA256SUMS` and `releases.json`
+(`SHA256SUMS.sig`, `releases.json.sig`) with an ed25519 key that exists only in an Actions secret,
+and `yggd` checks them against public keys compiled into it (`internal/shared/releasesig`) before
+installing a binary, before registering a fetched agent binary, and before believing a version
+label that decides which way an update is offered. Each signature binds the release tag and file
+name as well as the bytes, so one channel's signed manifest cannot be republished as another's.
+With no key compiled in — the state until an operator creates one (`docs/installation.md`,
+"Release signing") — nothing is checked and `/updates` and the log say so; once one is, the
+release workflow refuses to publish unsigned. This is a different key from the control plane's
+own binary-signing key (ADR-040), which nodes pin: the release key says CI built the bytes, the
+control-plane key says this control plane vouches for them to its own nodes. Once installed, `yggd`
 sends itself `SIGTERM` — reusing the graceful-drain shutdown path it already runs for a normal
 signal — but only when `INVOCATION_ID` is set in the environment, systemd's marker that
 `Restart=always` will actually bring the process back up. Restarting `yggd` never stops a game
 server either way, the same "control plane outage never stops a game server" property the
 overview above already guarantees; the only visible effect is the UI being briefly unreachable.
+
+**Every release download is bounded and stays on GitHub** (ADR-183). Each read
+`internal/control/selfupdate` makes has its own cap — the release listing 4 MiB, `SHA256SUMS`
+64 KiB, `releases.json` 1 MiB, the yggd binary 512 MiB, an agent binary 512 MiB, a seed bundle
+64 MiB and the seed index 4 MiB — and passing one is `ErrAssetTooLarge` naming what and the cap,
+never a truncation that then fails a checksum for no visible reason. Every download, and every
+redirect on the way, must be `https` on one of GitHub's own release hosts (`api.github.com`,
+`github.com`, `release-assets.githubusercontent.com`, `objects.githubusercontent.com`); the
+policy rides on the `Release` value itself, so a hand-built one gets GitHub's rule too, and there
+is no exported way to fetch an asset's URL around it. The seed catalog's index goes through the
+same path (`selfupdate.FetchAsset`).
 
 ### Version skew is permanent, not transient
 
@@ -1091,7 +1140,9 @@ ADR-119 already built — which is what makes it safe for the search to sit in t
 ordinary live-triggered re-render: nothing here differs from a server's own player card re-rendering
 on every fleet event, except that a search result's own "who's online now" answer only updates when
 the operator submits it again, the same one-shot-until-resubmitted contract `/installs`' state
-filter already uses.
+filter already uses. A call that would actually reach Steam (a cache miss) spends one token of a
+per-account budget — ten, refilled at ten a minute — since every account can reach this page and
+every call spends the operator's one shared API key's quota (ADR-179).
 
 **`/jobs`** is the fleet-wide list every long-running operation lacked until now (ADR-140's own
 finding, from the top-down review): install, install update, backup, restore, server move and
@@ -1195,7 +1246,7 @@ HTTP handlers as the rest of the UI, bounded to 64 MiB per upload.
 The UI is a fixed left nav rail — grouped Fleet / Library / Infrastructure / System, so the
 destination count can keep growing — beside an inset content pane with a slim context bar
 (ADR-054). It replaced a horizontal tab bar that nine destinations had already outgrown. The
-System group's six destinations (Security, Users, Roles, Logs, Updates, Settings) are each
+System group's seven destinations (Security, Users, Roles, Logs, Audit log, Updates, Settings) are each
 individually conditional on the specific permission their route needs (ADR-161) — a viewer
 without `security.manage` simply never sees the Security link, rather than seeing it and then
 hitting a 403. **Library's and Infrastructure's four destinations (Seeds, Installs, Nodes,
@@ -1214,7 +1265,8 @@ permission-gated (ADR-162), not only the buttons reached from them: Overview and
 `servers.view`, and Files/Backups/Settings each need their own `manage_*` permission — a role
 holding only `servers.manage_backups` sees just Overview, Console and Backups, never a Files or
 Settings tab that would 403 the moment it was clicked. A seed declaring a container UI (ADR-147)
-adds a sixth, conditional tab for that addon's own web interface, proxied rather than linked to
+adds a sixth, conditional tab for that addon's own web interface, served from a separate addon
+origin (ADR-182) and proxied rather than linked to
 directly. An Access tab is conditional the same way, shown only to a server's Owner or a global
 Admin — the tier that can see and manage who else holds an assignment on it (ADR-159, generalized
 by ADR-161).
@@ -1235,6 +1287,8 @@ pod, because a changed `PodSpec` is otherwise silently ignored — `Provision` r
 survives, since `Destroy` removes containers and the pod network but never a host directory,
 and every writable path is a bind mount from the server's own directory. A port field left
 blank takes the next free port in the node's range; a derived port is shown but not editable.
+Only one rebuild of a server runs at a time: a second — a double-clicked Rebuild, or a settings save
+landing while one is in flight — is refused before it writes or stops anything (ADR-179).
 
 **A seed's controls are tabbed once there are enough of them, and the page is searchable**
 (ADR-085) — a vertical tab rail beside one panel per group once a seed declares four or more
@@ -1442,7 +1496,10 @@ vocabulary: `download`, `extract`, `steamcmd`, `mkdir`, `copy`, `move`, `chmod`,
 `patch`, `load_image`, plus three reserved lifecycle ops for a game that must boot once to
 write its own config. `install.image` is required exactly when a step needs a container and
 forbidden otherwise, and a shared install may not reference per-server data at all — it is
-mounted read-only by every server referencing it.
+mounted read-only by every server referencing it. A `download` step may pin the `sha256` of what
+it fetches, which the agent checks before the bytes reach the step's destination, and an `https`
+download redirected to plain `http` is refused (ADR-183); `ygg-seed lint` warns about an unpinned
+download.
 
 **`load_image` imports a container image from a tar archive already in the install directory
 into the node's local image store, never a registry** (ADR-155). It exists for a game whose
@@ -1474,13 +1531,15 @@ control plane — so the agent still needs no access to a seed's variables or to
 channel (ADR-012). The old `method`/`url`/`archive`/`filename`/`app_id` fields are still written
 alongside the steps, so a protocol 1 agent installs exactly as it did; that work
 took the negotiated protocol to 2 (ADR-014's N-1 window, which until then had no real history to
-mean anything against), and later additive bumps have since taken it to 13 — the log viewer
+mean anything against), and later additive bumps have since taken it to 16 — the log viewer
 (ADR-082), `ReclaimData` (ADR-088), managed config writes (ADR-092), cluster file operations
 (ADR-105), the destroy confirmation (ADR-107), a per-step SteamCMD depot-bitness override
 (ADR-121), a per-step SteamCMD depot-platform-OS override (ADR-123), a node's own free-disk
 figure on every heartbeat (ADR-134), the install force-clean escape hatch (ADR-142), the
-Files page's zip-extract option (ADR-146), and a container's image being sourced from an
-install step rather than a registry (ADR-155). `op: load_image` itself, unlike every one of
+Files page's zip-extract option (ADR-146), a container's image being sourced from an
+install step rather than a registry (ADR-155), a one-shot container (ADR-156), the install
+update check (ADR-171), and an agent-binary signature bound to its version and architecture plus
+a download step's sha256 pin (ADR-183). `op: load_image` itself, unlike every one of
 those, needed no bump at all — it reuses wire fields already generic since protocol 2.
 `internal/configfile` is the shared key-patching implementation behind both
 the `patch` step and a config file managed `patch`, so a key path means the same thing at
@@ -1548,42 +1607,69 @@ the moment of the save, so the invariant holds for a server whose earlier save f
 Validation carries the rest: an addon cannot be primary, nothing required may depend on one, and
 no template may reference one's port.
 
-**A container's own web UI can get its own tab, proxied rather than linked to directly**
-(`containers[].ui`, ADR-147) — the case a database admin tool beside a bundled database exists
-for. Any number of containers may declare one (ADR-154) — a Director control panel and a database
-manager beside it, say — each identified by its own container `Role`, which is already guaranteed
-unique within a seed; the only constraint left is that two tabs may not share a `ui.tab` label, so
-the strip never shows two indistinguishable entries. Each tab appears only while its container is
-currently enabled. `GET /servers/{id}/addon/{role}` is the ordinary tab chrome around an iframe for
-one addon, and `/servers/{id}/addon/{role}/proxy/...` is where `yggd` itself reverse-proxies to
-that container's node and allocated port, resolved fresh on every request. Proxying rather than
-linking directly to the
-node's address is deliberate: a direct link breaks in an iframe the moment the operator reaches the
-UI through the Cloudflare tunnel (mixed content, HTTPS parent page and bare HTTP target), where a
-same-origin proxy does not. The proxy strips an addon's own `X-Frame-Options` and any CSP
-`frame-ancestors` directive from its response (ADR-151) — a real backend refusing to be framed by
-default (Adminer's own `X-Frame-Options: deny`) would otherwise defeat the one thing this route
-exists for, since being embedded in this page's iframe is not incidental here, it is the point.
-A published port whose image cannot be told what to bind to at all may also need
-`container_port` (ADR-150) to be reachable in the first place — Adminer's own standalone server
+**A container's own web UI can get its own tab, served from a separate addon origin**
+(`containers[].ui`, ADR-147, ADR-182) — the case a database admin tool beside a bundled database
+exists for. Any number of containers may declare one (ADR-154) — a Director control panel and a
+database manager beside it, say — each identified by its own container `Role`, which is already
+guaranteed unique within a seed; the only constraint left is that two tabs may not share a `ui.tab`
+label, so the strip never shows two indistinguishable entries. Each tab appears only while its
+container is currently enabled. `GET /servers/{id}/addon/{role}` is the ordinary tab chrome around
+an iframe for one addon; the addon itself is never served from the UI's own origin.
+
+**It is served from a second listener with an origin of its own** (ADR-182), configured in
+`yggd.yaml` by `addon_http_addr` and `addon_public_url` — behind the Cloudflare tunnel, a second
+public hostname. ADR-147 originally reverse-proxied an addon under the UI's own origin at
+`/servers/{id}/addon/{role}/proxy/...`, which is what made every script an addon served run as the
+operator viewing it, passing every same-origin check; that route is gone (404). With no addon
+origin configured, a tab explains that the feature is off rather than serving anything: there is no
+same-origin fallback. The tab's iframe points at `<addon origin>/a/{id}/{role}/enter` with a
+60-second, single-use, HMAC-signed ticket (key in `<data_dir>/addon-ticket.key`) binding the user,
+server, role and the UI page's own origin. The addon listener redeems it, re-checks
+`servers.manage_addons` and that the addon is still enabled, and issues an addon-session cookie
+scoped to `/a/{id}/{role}/`, bound to the yggd session that minted it and re-validated at least
+every minute (an upgraded websocket is closed when a re-check fails). That listener serves nothing
+of the UI: an entry, a wrapper page, the proxied addon under `/a/{id}/{role}/app/`, and one script.
+It never treats yggd's session cookie as authentication and strips every `ygg_*` cookie before
+proxying — on a same-host, different-port deployment the browser sends yggd's session cookie there
+too, since host cookies ignore the port.
+
+**The proxy dials exactly the addon** (ADR-182, S47/S65): the node's *observed* address (where its
+agent's stream came from, never the advertise override, which is for players), at the port
+allocated to that container's declared UI port, and only once the addon container is reported
+running from a start no earlier than that allocation — so a port pinned in Settings whose rebuild
+has not happened yet reads as "rebuild first" rather than reaching whatever else listens there.
+Proxying rather than linking directly to the node's address is still deliberate: a direct link
+breaks in an iframe the moment the operator reaches the UI through the tunnel (mixed content, HTTPS
+parent page and bare HTTP target). The proxy strips an addon's own `X-Frame-Options` and any CSP
+`frame-ancestors` directive from its response (ADR-151) — Adminer's own `X-Frame-Options: deny`
+would otherwise defeat the one thing this exists for — and adds its own
+`frame-ancestors 'self' <UI origin>`, nosniff, and a referrer policy; the UI's own CSP `frame-src`
+names the addon origin. A published port whose image cannot be told what to bind to at all may also
+need `container_port` (ADR-150) to be reachable in the first place — Adminer's own standalone server
 always listens on a fixed 8080 regardless of the host port it is allocated.
 
-**A container's `ui` may also declare `login`, to auto-submit its own login form** (ADR-152) —
-values yggd already knows (a generated database password, a fixed username) rendered through the
-same templating every other seed string uses, into the iframe's own `data-addon-autologin`
-attribute. `static/addonlogin.js` polls the iframe's `contentDocument` — same-origin, since
-everything is proxied through this control plane's own address — for a password input, fills each
-named field, and submits the form the addon itself rendered once one appears; a later internal
-navigation inside the addon finds no password field and does nothing, so this never re-submits
-credentials into a page the operator is already signed into. Adminer's own login form takes a
-per-session CSRF token from the page it just served, which is exactly why this runs client-side
-rather than as a second server-side POST built without ever having loaded that page.
+**A container's `ui` may also declare `login`, to auto-submit its own login form** (ADR-152,
+ADR-182) — values yggd already knows (a generated database password, a fixed username) rendered
+through the same templating every other seed string uses. They are rendered only into the addon
+origin's wrapper page, only after its ticket is redeemed, and only on the first wrapper load of an
+addon session — never into a page on the UI's own origin. The wrapper frames the proxied addon on
+that same addon origin, so `static/addonlogin.js` (served there as `/_ygg/addonlogin.js`) can poll
+the iframe's `contentDocument` for a password input, fill each named field, and submit the form the
+addon itself rendered once one appears; it removes the credential from the DOM before polling and
+forgets it on every exit. A later internal navigation inside the addon finds no password field and
+does nothing, so this never re-submits credentials into a page the operator is already signed into.
+Adminer's own login form takes a per-session CSRF token from the page it just served, which is
+exactly why this runs client-side rather than as a second server-side POST built without ever
+having loaded that page.
 
 **A port declares what it is for** (`kind: game|query|rcon|web|voice|other`), and a seed may
 declare a **connect** block — a URI a client understands, an address to copy, or both. It is
 rendered per request rather than stored, because it templates over the node's address, which can
 change and can legitimately be unknown (ADR-065); with no address known it renders nothing at
-all, since a bare port reads as incomplete and a URI with an empty host does not.
+all, since a bare port reads as incomplete and a URI with an empty host does not. The URI becomes
+a Join button only for an allowlisted scheme (`steam`, `minecraft`, `ts3server`, `mumble`,
+`fivem`, `http`, `https`, `seed.ConnectSchemeAllowed`): a seed is third-party data, and the
+denylist this replaced still let an OS protocol handler such as `ms-msdt://` through (ADR-179).
 
 **A command can reach the node's address directly, with no port joined to it** (ADR-128).
 `TemplateData.NodeAddress` is the same address the connect block and every allocation's endpoint
@@ -1750,7 +1836,9 @@ rejects a field that does not belong.
 
 **Branding images are uploaded, fetched from a URL, or taken from Steam**, and land in the seed's
 own bundle directory (`internal/control/branding`) — so publishing the seed carries the artwork to
-everyone who installs it, which is what makes this worth storing rather than hotlinking. Steam is
+everyone who installs it, which is what makes this worth storing rather than hotlinking. A fetched
+URL goes through the same `netguard` client as a version check (ADR-179): `seeds.manage` can be a
+narrow custom role, so artwork on a LAN host is uploaded rather than fetched. Steam is
 not a third mechanism: it resolves an app id to an image and then takes the URL path. The app id is
 its own field rather than the install step's, because they are often different — Valheim's
 dedicated-server tool has no store page while its base game does, and the same holds for ARK
@@ -1867,6 +1955,9 @@ a seeds directory that is not a git clone at all; the project's own catalog inst
 target renders the Publish button inert ("Set a publishing repository in Settings first") rather
 than risking a second writer.
 
+Only one publish runs at a time per control plane; a second is refused rather than allowed to
+delete the release the first is still uploading into (ADR-179).
+
 Packing runs first and completely, before anything on the remote is touched. `seedpack` loads
 every bundle through the strict loader and rejects a version `version.Compare` cannot order, so a
 seed that would produce an uninstallable catalog fails while the existing release is still intact
@@ -1888,7 +1979,8 @@ image (used to prefill the Icon field, since it is already a plain `http(s)://` 
 `steamcmd +app_info_print` for whether a Linux depot exists at all, the same authoritative check
 ADR-047's own development used by hand for Valheim's app id. Results are cached in memory per app
 id for an hour and the lookup is entirely on-demand — clicking the button, never a background
-poller. SteamDB is a plain search-page deep link next to the button, exactly as ADR-051 decided:
+poller. At most two uncached lookups (this one and the artwork picker's) run at once; a third
+answers "busy" rather than starting another steamcmd process (ADR-179). SteamDB is a plain search-page deep link next to the button, exactly as ADR-051 decided:
 nothing in `yggd` parses or scrapes it. The two sources degrade independently: an app id with no
 ordinary store page (confirmed live against Valheim's real dedicated-server app id, 896660, which
 genuinely has none) still gets its Linux-depot answer, and a control plane host with no SteamCMD
@@ -2000,6 +2092,19 @@ the page an operator would use to correct it. The in-memory index cache is keyed
 *and* channel, since a channel-only key would answer with the previous repository's listing for
 up to an hour after a switch.
 
+**The checksum proves the bundle arrived intact, not that its author is benign** (ADR-179, S66).
+A seed's install steps run on every node a server from it lands on, and its containers, commands
+and backup hooks run there too, so a non-default `seeds.catalog_repo` is trusting that
+repository's author with the whole fleet — the trust an operator already extends to a seed they
+wrote themselves. `/seeds` says so, naming the repository, whenever it is not the project's own.
+What the agent does bound is one specific reach: a seed `download` step's connections pass
+`internal/shared/netguard`'s dial-time check under its private-allowing policy
+(`BlockedExceptPrivate`), so a seed cannot make a node fetch its own loopback, link-local (the
+cloud metadata endpoint included), CGNAT or other special-purpose addresses, while a mirror on
+the node's own RFC 1918 or unique-local network stays reachable. The control plane's own outbound
+fetches keep the stricter policy that refuses private addresses as well. No wire change: the check
+is the agent's own, so an older agent simply fetches anything, as it always did.
+
 **A bundle on disk that will not load is skipped, not fatal.** The catalog and operator layers
 hold files the running binary never shipped, so a later validation tightening can invalidate a
 bundle that was fine when it was installed, and refusing to start over it would crash-loop the
@@ -2054,6 +2159,13 @@ dedicated-server images use to validate or self-update at container start — wh
 `base-steamcmd-proton` closes the gap `base-steamcmd`'s own entry used to name here: what a
 genuine ARK image needs (phase 5's status below) now has both the SteamCMD half and the Proton
 half built and verified against a real Podman host — the ARK image itself is still unbuilt.
+
+**Every third-party input an image build fetches is verified before it is used** (ADR-183):
+GE-Proton, umu and gosu against the checksums their publishers release, the SteamCMD bootstrap
+tarball and Microsoft's `packages-microsoft-prod.deb` against a sha256 pinned in the Dockerfile
+(neither publisher releases one), and Adoptium's apt key against a pinned fingerprint. Each pin's
+comment says how to re-pin it, and a mismatch fails the build with a message naming the `ARG` to
+check — a pin breaking on a deliberate upstream change is the intended cost.
 
 None of the five bundle a game. The library's own design rule (ADR-047's amendment) is
 environment only — runtime, its OS-level dependencies, and whatever launches it — with the game
@@ -2225,10 +2337,15 @@ surfaced on `/settings` with a link but stay owned by their own pages, since swi
 action rather than a stored value (ADR-056).
 
 The table is key/value; what a key *means* lives in `internal/control/settings` as a registry of
-typed `Definition`s. Eleven ship, each with a live consumer: `log.level` (the process's own
-`slog.LevelVar`, so debug can be switched on and off without a restart), `stats.retention_days`
-(read by `telemetry.Collector` on every prune), `backups.retention_days` (read by the scheduler's
-archive prune the same way, ADR-088), `nodes.disk_low_percent` (read through `Capacity.DiskLow`,
+typed `Definition`s. Twenty-four ship, each with a live consumer — the ten provider Sign-in
+settings (ADR-115, read fresh by `loadProviderSettings` on every login), the two session limits
+`auth.session_idle_hours` and `auth.session_max_days` (read by the authenticator on every
+request through the function `web.New` installs, ADR-181), and these: `log.level` (the
+process's own `slog.LevelVar`, so debug can be switched on and off without a restart),
+`stats.retention_days` (read by `telemetry.Collector` on every prune), `backups.retention_days`
+(read by the scheduler's archive prune the same way, ADR-088), `audit.retention_days` (read by
+the same scheduler tick to prune the audit trail, default 365 with a floor of 30, ADR-178),
+`nodes.disk_low_percent` (read through `Capacity.DiskLow`,
 ADR-134), `ui.language` (ADR-086), `steam.api_key`, `steam.update_check_interval_hours` (read by
 `gameupdate.SteamChecker` on every tick, the same shape as the retention settings above, ADR-171),
 `installs.version_check_interval_hours` (read by `gameupdate.VersionChecker` the same way, its own
@@ -2242,7 +2359,10 @@ outright.
 
 `store.Open` narrows the database file to `0600`, since it holds password hashes, session
 tokens, bootstrap tokens and now credentials. Defence in depth rather than the boundary: the
-containing directory is already `0750`, which is why a `chmod` failure is non-fatal.
+containing directory is already `0750`, which is why a `chmod` failure is non-fatal. The
+credentials themselves — every `KindSecret` setting — are stored encrypted (AES-256-GCM, bound to
+the setting's key) under `<data_dir>/pki/settings.key`, so a copy of the database alone carries
+none of them; anyone who can read the whole data directory still can (ADR-181).
 
 ## Security model
 
@@ -2259,7 +2379,13 @@ Scope is a homelab: a small set of trusted people, not untrusted tenants.
   and a role, no join code and no OIDC round trip — for a login that will never touch a
   federated provider at all; the account is forced to set its own password before reaching
   anything else (`User.MustChangePassword`, ADR-167 — see "Self-service profile" just below).
-  `api_tokens` remains dead schema, unused since the first migration.
+  `api_tokens` remains dead schema, unused since the first migration. The sign-in flow and join
+  cookies are sealed with an HMAC under a per-process key, so a value another site planted is
+  refused; provider calls go through a client with a timeout and a 1 MiB response bound, never
+  `http.DefaultClient`; a failed provider round trip shows an unauthenticated visitor only that
+  it failed, with the upstream detail in the log and the audit trail; and a Microsoft identity is
+  keyed on `tid:oid`, a pre-upgrade bare-oid link being found and rewritten at its next sign-in
+  (all ADR-181).
 - **Self-service profile** — every account manages its own display name, email (a plain
   contact field; this project has no outbound email capability, so nothing here is verified
   or ever emailed), and local password from `/profile`, gated by `requireAuth` alone since it
@@ -2286,11 +2412,47 @@ Scope is a homelab: a small set of trusted people, not untrusted tenants.
   password whenever `HasPassword` is true, so confirming the admin-typed password before
   replacing it falls out for free.
 - **Who's signed in** — `/users` also lists every account holding at least one still-valid
-  session, newest sign-in first (`Store.ListSignedInUsers`, ADR-167). Sessions record only when
-  they were issued and when they expire, never a last-active time, so this means "holds a
-  session that has not yet lapsed," not "has a browser tab open right now" — an account that
-  signed in three weeks ago and never returned still reads as signed in until that 30-day
-  session (`auth.sessionLifetime`) runs out.
+  session, newest sign-in first, with when each was last used (`Store.ListSignedInUsers`,
+  ADR-167, ADR-181). "Still valid" is the session policy below, so an account that signed in and
+  walked away drops off this list once its session goes idle.
+- **Sessions** (ADR-181) — a session ends after `auth.session_idle_hours` unused (default 12)
+  and `auth.session_max_days` after sign-in regardless (default 30), both runtime settings read
+  on every request; last-seen is written at most once a minute per session. Each session records
+  where it was signed in from (`edge.ClientIP`) and a short browser summary, which `/profile`
+  lists with "sign out" per row and "sign out everywhere else"; `/users` can sign another
+  account out everywhere and set a fresh temporary password. Signing in on a browser that
+  already held a session deletes the old one rather than leaving it valid. Over HTTPS the cookie
+  is `__Host-ygg_session` (Secure, Path=/, no Domain), which a sibling subdomain cannot plant;
+  the old name is honoured over HTTPS only for a session that existed before the rename (marked
+  by migration 00039) and upgraded in place, so nobody is signed out by it, while the sign-in
+  flow, join, link and re-authentication cookies are read only under `__Host-` there.
+- **Step-up re-authentication** (ADR-181) — each session records when its holder last proved
+  who they are. Changing who can do what (users, invites, roles, resource grants, linked
+  sign-in methods, a first password on a federation-only account), touching a credential
+  (changing or clearing a secret setting, CA or signing-key rotation, enrollment tokens),
+  replacing what runs (self-update, agent binaries) and deleting a server, cluster or node all
+  need that to be within ten minutes, or go to `/reauth` first: the password, through the same
+  lockout and hashing gate as sign-in, or a fresh round trip through a provider already linked
+  to the account. A POST cannot be replayed across the redirect, so the browser returns to the
+  page the form was on with an "identity confirmed, submit again" notice. `web.stepUp` is applied
+  at route registration and a test enumerates the set.
+- **Brute force** (ADR-181) — lockout is keyed on (username, client address), so a guesser locks
+  out only themselves; failures on one name from many addresses slow every attempt on it
+  (doubling to five seconds) instead of locking it. Each client may hold one of the four argon2id
+  slots at a time. Neither stops a spray from four or more addresses holding every slot and so
+  shedding the holder's own attempt, so a browser that has signed in to an account with its
+  password carries a long-lived device cookie (HMAC-sealed under `pki/device.key`, naming that
+  account): an attempt presenting one for the account it is signing in as uses a reserved slot,
+  skips the spray delay and the lockout, and has its own failures counted — ten, and the cookie
+  is not trusted for five minutes. The profile page's current-password check goes through the
+  same limiter. One
+  password policy (12 characters to 1024 bytes) applies wherever a password is set or typed; one
+  username rule (ASCII letters, digits, `. _ - @`, at most 64) applies to every new account, and a
+  name equal to an existing one ignoring case is refused. An admin-chosen temporary password
+  stops working after 72 hours.
+- **First-run setup** (ADR-181) — `/setup` needs a one-time token yggd prints to stdout and its
+  log at every start while no account exists, compared in constant time and throttled per client;
+  it dies with the first account.
 - **RBAC** — a unified roles-and-permissions model (ADR-161, superseding the two separate fixed
   tier systems ADR-115 and ADR-159 originally built): a role is a named set of fine-grained
   permissions from a fixed catalog (`internal/control/rbac`), not a rank on a ladder. A role's
@@ -2319,8 +2481,47 @@ Scope is a homelab: a small set of trusted people, not untrusted tenants.
   global role, or the servers and clusters for a resource-scoped one, each linked back to its own
   page. See "Per-resource access grants" just below for the resource-scoped half of this in full
   — it is additive underneath a user's global role, not a replacement for it.
+- **Audit trail** — every security-relevant action is recorded in the `audit_events` table
+  (ADR-178): sign-in success, failure and lockout, sign-out, setup, federated sign-in and invite
+  redemption, password and identity changes, account, role and per-resource grant changes,
+  settings changes (the key, never the value), node enrollment, token creation and removal, CA
+  and signing-key rotation, server and cluster create/delete/move, seed and catalog changes,
+  agent-binary registration and agent/control-plane updates — plus every 403 from a permission
+  check and every same-origin rejection. Each row carries the acting account (a snapshot of its
+  username, so a deleted account's history still reads), the target, the outcome, the client
+  address (the tunnel's forwarded claim, with the TCP peer kept beside it when they differ) and a
+  few non-secret details, and is mirrored as one structured `msg=audit` log line. What an
+  anonymous or misbehaving client can repeat — denials, failed sign-ins — is throttled to one row
+  per key per minute and 120 a minute overall, with suppressed counts carried forward and the
+  overall budget's refusals reported as one `audit.throttle_suppressed` row when it reopens; a
+  throttled event still gets its Warn log line, and a lockout is never subject to the budget. Rows
+  survive restarts, unlike the `/logs` ring (ADR-082), and are pruned by the scheduler past
+  `audit.retention_days` (default 365, never below 30). `/audit`, in the rail's System group,
+  shows them newest first with actor/action/outcome/target filters, gated on `audit.view` — held
+  by the built-in Admin role only.
 - **Perimeter** — the UI is reachable only over the LAN or through the Cloudflare tunnel,
   which provides external authentication. `yggd` never binds to a public interface.
+- **HTTP surface** (ADR-180) — the UI listener can serve HTTPS itself (`http_tls_cert`/
+  `http_tls_key`, TLS 1.2 floor, re-read on renewal), so LAN access need not be cleartext. An
+  edge layer (`internal/control/edge`) runs before routing: it believes `X-Forwarded-Proto`/
+  `X-Forwarded-Host` only from `http_trusted_proxies` (loopback by default, where cloudflared
+  usually runs) and strips them from anyone else, believes a client address only from the one
+  header `http_client_ip_header` names, and with `http_allowed_hosts` set it refuses
+  a request for an unlisted host name with 421 — DNS-rebinding defence, since an origin check
+  derived from the request's own Host passes a rebound name. `edge.IsTLS`/`edge.Host` are the
+  one answer to "was this HTTPS" and "which host did the browser use", read by the POST and
+  websocket origin checks, HSTS and the CSP alike. Every UI response carries a site-wide
+  Content-Security-Policy with no inline script (the one inline handler, the confirmation
+  fallback, is allowed by hash), `X-Frame-Options: SAMEORIGIN` with `frame-ancestors 'self'`,
+  nosniff, a same-origin referrer/opener/resource policy, a Permissions-Policy denying
+  hardware and payment APIs, `Cache-Control: no-store` outside `/static`, and HSTS over HTTPS.
+  No UI path is exempt: addon web UIs are served from a separate addon origin (ADR-182), whose
+  own listener runs its own edge, answers only to its own host name, and carries its own headers
+  (`frame-ancestors` naming the UI origin); the UI's `frame-src` names that origin. Request bodies have a read deadline per route family on top of their size cap, without a
+  server-wide timeout that would cut websockets. `/static` lists no directories, and
+  unauthenticated `/healthz` reports health without the build; it is mounted beside the UI
+  rather than inside it, and wrapped in the same headers (`Server.WithSecurityHeaders`) so
+  nothing the UI origin serves goes without them.
 - **Agent auth** — mTLS with certificates from the control plane's internal CA, separate from
   human auth.
 - **Agent binaries** are signed and verified before replacement — the self-update path fetches
@@ -2366,7 +2567,10 @@ instead of the 403 that correctly says "you can see this everywhere else, you ju
 this." Access management itself needs `servers.manage_access`/`clusters.manage_access` — a
 permission only built-in Owner and Admin's global role hold by default, deliberately tighter than
 ordinary Owner-tier actions like delete and move, which stay reachable by a plain Operator with
-no personal assignment.
+no personal assignment. A holder of it may only grant a role whose permissions they hold themselves
+on that resource (ADR-176), and may only remove or overwrite an assignment whose permissions they
+hold (ADR-179) — so a delegate given access management cannot strip or demote the Owner who
+delegated it. Admin is exempt from both.
 
 `serverFromPath`/`clusterFromPath` carry the check: both take a single permission string and
 resolve access before returning the row, so a route that forgets to declare one is a compile
@@ -2383,12 +2587,15 @@ guard the way there is for the last account able to manage users. An assignment 
 targets an existing account — granting access to someone not yet invited means inviting them at
 `/users` first.
 
-`/allocations`, `/players`, `/jobs`, and `/installs` are **not** scoped by any of this — none of
-the four can be narrowed to specific nodes, installs, or jobs the way a server or cluster can be,
-a stated limitation rather than a silent gap. Nodes, seeds, and installs carry no per-resource
-role model at all. `/allocations` and `/installs` do still need their own fleet-wide `*.view`
-permission to open at all (ADR-168, "Operator UI shape" above) — `/players` and `/jobs` are the
-two that stay open to any authenticated user regardless of role.
+`/allocations` and `/installs` are **not** scoped by any of this — neither can be narrowed to
+specific nodes or installs the way a server or cluster can be, a stated limitation rather than a
+silent gap — and each needs its own fleet-wide `*.view` permission to open at all (ADR-168,
+"Operator UI shape" above). Nodes, seeds, and installs carry no per-resource role model at all.
+`/players` and `/jobs` stay open to any authenticated user, but **their rows are scoped** (ADR-179):
+`/players` shows only players on servers the user can see, and `/jobs` shows a server or cluster job
+only when its target is visible to the user, an install job only with `installs.view` and an agent
+update only with `nodes.view`, with the node column a link only for a `nodes.view` holder. Both use
+the bulk-load-then-filter shape above, and are a no-op for a fleet-wide `servers.view` holder.
 
 ## External dependencies
 
@@ -2528,12 +2735,12 @@ from the UI" above for the full sequence and ADR-040/ADR-041 for the design.
 **The N-1 half is closed too, and the criterion is met in full.** It could not have been when it
 was written: `Protocol == MinProtocol == 1`, so there was no older peer in existence to build,
 and the negotiation could only be exercised against constructed ranges. As of this writing the
-protocol is `11` (`internal/shared/version.Protocol`) with the floor still at `1`, so ten older
+protocol is `16` (`internal/shared/version.Protocol`) with the floor still at `1`, so fifteen older
 peers genuinely exist — a count that only grows as the protocol does, which is exactly why
 `hack/n1-check.sh` reads `version.go` itself rather than a number written here: it walks the
 file's own history and builds a peer from every protocol between the floor and the current one,
-so the *script* cannot go stale as the protocol moves. This sentence can, and already has three
-times — read "the protocol is `11`" as accurate as of this edit, `version.go` as the actual source
+so the *script* cannot go stale as the protocol moves. This sentence can, and already has four
+times — read "the protocol is `16`" as accurate as of this edit, `version.go` as the actual source
 of truth, and `hack/n1-check.sh`'s own output as what to trust over either. The verified run below
 was made at protocol 5, when four older peers existed (0.11.0 at
 protocol 1, 0.39.0 at 2, 0.40.1 at 3, 0.44.0 at 4), and ran the whole criterion against them —
