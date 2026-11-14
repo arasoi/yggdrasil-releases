@@ -70,9 +70,10 @@ anything not passed.
 
 Run `install.sh --help` for every flag (channel, addresses, install
 directory). It verifies the download the same way step 1 below does by hand
-— HTTPS plus the release's published `SHA256SUMS`, no separate signing key
-(ADR-043). Re-running it against an already-installed host is a real update
-path, not just best-effort: it replaces the binary and restarts the service,
+— HTTPS plus the release's published `SHA256SUMS` (ADR-043); it does not
+check the release signature `yggd` checks on later updates (see
+[Release signing](#release-signing) to check one by hand). Re-running it
+against an already-installed host is a real update path, not just best-effort: it replaces the binary and restarts the service,
 but never rewrites a config value already in the file (yours or a previous
 run's) — a config option added by a newer release is appended net-new,
 commented out exactly as the example ships it, rather than silently never
@@ -120,6 +121,12 @@ On **each node host**:
   If that package is not readable from your node — the source repository is
   private, so it may not be — mirror it and point the agent at the mirror
   instead of installing SteamCMD by hand.
+- **Direct outbound access for seed downloads.** A seed's `download` step is
+  fetched by the agent itself, and it ignores `HTTP_PROXY`/`HTTPS_PROXY`, since
+  a proxy would carry the connection past its address check. That check refuses
+  the node's loopback, link-local (including cloud metadata), CGNAT and other
+  reserved addresses; a mirror on a private LAN address (`10/8`, `172.16/12`,
+  `192.168/16`, `fc00::/7`) is fine (ADR-179).
 
 Neither binary needs a Go toolchain, a database server, or anything else
 installed to *run* — only the container runtime and systemd above, on node
@@ -252,6 +259,138 @@ At minimum, decide:
   usually right; just make sure nothing blocks port 8443 between your node
   hosts and this machine.
 
+> **Running the tunnel connector or a reverse proxy on another machine? Set
+> `http_trusted_proxies`.** yggd only believes `X-Forwarded-Proto`,
+> `X-Forwarded-Host` and the client-address header (below) from peers in that
+> list, which defaults to loopback —
+> right when `cloudflared` runs on the same host as `yggd`, which is the
+> ordinary setup. From any other peer those headers are stripped (ADR-180).
+> Behind a proxy that is *not* listed, sign-in still works but the session
+> cookie is no longer marked Secure, and every form POST and websocket is
+> refused with "cross-site POST blocked" because the origin no longer matches.
+> `yggd` logs `ignoring X-Forwarded-* headers from a peer outside
+> http_trusted_proxies` (at most once every ten minutes) naming the peer
+> address to add:
+>
+> ```yaml
+> http_trusted_proxies: ["127.0.0.0/8", "::1/128", "192.168.1.20"]
+> ```
+
+The browser's own address — what sign-in lockout counts against, what the audit
+log records and what `/profile` shows beside each session — comes from **one**
+header a trusted proxy sets, `http_client_ip_header` (`YGG_HTTP_CLIENT_IP_HEADER`):
+
+- `X-Forwarded-For` (the default) — yggd takes its **rightmost** entry, the one
+  your proxy appended itself. Right for nginx (`proxy_set_header
+  X-Forwarded-For $proxy_add_x_forwarded_for`), Caddy, Traefik, and the
+  Cloudflare tunnel, whose edge appends the visitor's address too.
+- `CF-Connecting-IP` — what `cloudflared` sets; choose it if the tunnel is the
+  only thing in front of yggd and you prefer Cloudflare's own header.
+- `X-Real-IP` — only for a proxy that **overwrites** it with the address it saw.
+
+Every other client-address header is removed, even from a trusted proxy: most
+proxies pass a browser-sent `X-Real-IP` or `CF-Connecting-IP` through
+unchanged, and believing it would let a client pick a new address per request
+and walk around the sign-in lockout. Any other value refuses to start.
+
+```yaml
+http_client_ip_header: X-Forwarded-For
+```
+
+Three more settings harden the UI listener itself. All three are read at
+startup from `yggd.yaml` (or `YGG_HTTP_TLS_CERT`, `YGG_HTTP_TLS_KEY`,
+`YGG_HTTP_ALLOWED_HOSTS` as a comma-separated list, and
+`YGG_HTTP_TRUSTED_PROXIES` likewise), since they shape the listener before
+there is a database to read settings from:
+
+- `http_tls_cert` and `http_tls_key` — serve the UI over HTTPS (TLS 1.2 or
+  newer). Set both or neither; one alone refuses to start. Use this whenever
+  `http_addr` is reachable from the LAN, because over plain HTTP anyone on the
+  network can read a sign-in password or the session cookie in transit — `yggd`
+  logs a warning at startup when it is listening beyond loopback without TLS.
+  The files are re-read when they change, so a renewal (certbot, a cron job)
+  takes effect without restarting. Over HTTPS, and through the tunnel, the
+  session cookie is marked Secure and responses carry
+  `Strict-Transport-Security: max-age=31536000`. HSTS pins the *host name* the
+  browser used: if you reach the same name over plain HTTP on your LAN
+  (split-horizon DNS), give the LAN its own name or turn TLS on there too.
+- `http_allowed_hosts` — the host names the UI answers to, such as your tunnel
+  hostname and a LAN name. A request addressed to any other name gets
+  `421 Misdirected Request`, which is what stops a malicious web page from
+  reaching a loopback-bound `yggd` through DNS rebinding — including the
+  unauthenticated first-run `/setup`. IP addresses and `localhost` are always
+  accepted, so `curl http://127.0.0.1:8080/healthz` keeps working. Empty, the
+  default, accepts any name and logs a warning at startup recommending you set
+  it.
+
+### Addon web UIs: a second origin
+
+Some seeds bundle an addon with a web interface of its own — a database admin tool such as
+Adminer, a map viewer — and give it a tab on the server's page. Since ADR-182 that tab is served
+from a **second listener with an origin of its own**, never from the UI's own address: an addon is
+a third-party image running third-party script, and served from the UI's origin anything it ran
+could act as you (create accounts, read settings, type into a game console). **Until you configure
+an addon origin, addon tabs show a notice saying the feature is off; nothing else changes.**
+
+Two settings, set together (environment: `YGG_ADDON_HTTP_ADDR`, `YGG_ADDON_PUBLIC_URL`):
+
+- `addon_http_addr` — the addon listener's own address, like `http_addr`. Keep it on loopback
+  behind a tunnel or proxy, exactly as you would `http_addr`.
+- `addon_public_url` — the bare origin browsers use to reach that listener, such as
+  `https://addons.ygg.example.com`. No path. yggd puts it in each addon tab's iframe and refuses
+  any request to the listener addressed to another host name (421).
+
+```yaml
+addon_http_addr: 127.0.0.1:8081
+addon_public_url: https://addons.ygg.example.com
+```
+
+**Use a distinct host name, not just a distinct port.** Both work, and yggd refuses only a URL that
+*is* the UI's own origin. But browsers scope cookies by host and ignore the port, so with
+`https://ygg.lan:8081` beside `https://ygg.lan:8080` your browser sends yggd's session cookie to the
+addon listener on every request. That is still safe — the addon listener strips it before proxying
+and never treats it as signing you in, and every state-changing route and websocket on the UI checks
+`Origin`, which an addon's script cannot forge — but a separate host name means the cookie is never
+sent there at all. Either way, keep the two **same-site** (a sibling subdomain of the UI's
+registrable domain, as above, or the same host): the addon's session cookie is `SameSite=Lax`, and
+browsers do not send such a cookie inside a frame from a different site, so an addon on an
+unrelated domain would never stay signed in.
+
+**Behind the Cloudflare tunnel this is a second public hostname.** Add it to the tunnel's ingress
+rules pointing at `addon_http_addr`, beside the UI's own hostname, and protect it with the same
+Access policy:
+
+```yaml
+# cloudflared config.yml
+ingress:
+  - hostname: ygg.example.com
+    service: http://127.0.0.1:8080
+  - hostname: addons.ygg.example.com
+    service: http://127.0.0.1:8081
+  - service: http_status:404
+```
+
+The addon listener trusts `X-Forwarded-*` from the same `http_trusted_proxies` the UI does.
+
+**TLS.** `addon_tls_cert` and `addon_tls_key` (both or neither) give the addon listener its own
+pair; unset, it reuses `http_tls_cert`/`http_tls_key`, so serving both from yggd directly needs a
+certificate covering both names (a SAN or wildcard certificate). With TLS on the listener,
+`addon_public_url` must be `https://`. Behind the tunnel alone, neither is needed: Cloudflare
+terminates TLS at its edge.
+
+What reaching an addon looks like: opening its tab mints a single-use, one-minute ticket; the
+addon listener redeems it, checks you still hold the server's "Manage server addons" permission,
+and signs you in to that one addon for up to eight hours, re-checking that permission (and that
+you have not signed out of yggd) at least every minute. A seed's `ui.login` auto-login still
+works: the credential is filled in on the addon origin and never appears on a UI page. yggd
+creates `<data_dir>/addon-ticket.key` (0600) the first time an addon origin is configured, and
+generates a new one at its next start if you delete it.
+
+`GET /healthz` answers `{"status":"ok","database":"ok"}` to anyone, and adds
+the running version, commit and protocol only for a signed-in browser
+session (ADR-180) — a monitor needs the first, and only an operator needs the
+second.
+
 Every config key has a flag and an environment variable equivalent
 (`YGG_HTTP_ADDR`, etc. — see the comments in `yggd.example.yaml`), so a
 config file is convenient but not required. If you want `yggd` to watch for
@@ -296,13 +435,47 @@ Check it came up:
 
 ```bash
 curl http://127.0.0.1:8080/healthz
+# or, with http_tls_cert set: curl https://<name in your certificate>:8080/healthz
 ```
 
 Then open the UI (directly at `http://<host>:8080` if you exposed it that
 way, or through whatever proxy you put in front of it) and create the
 administrator account — the first visit to any page redirects here
-automatically. This account is the only one; see ADR-009 for why v1 has no
-multi-user support.
+automatically.
+
+First-run setup needs a **one-time setup token** (ADR-181), so whoever reaches
+the listener first cannot simply claim the fleet. While no account exists,
+yggd prints the token at every start, as a ready path, to its stdout and its
+log:
+
+```bash
+journalctl -u yggd | grep setup
+# ... /setup?token=Zk3...  <- open this path on the control plane
+```
+
+Open that path (`http://<host>:8080/setup?token=...`), or paste the token into
+the setup page. The token changes each time yggd starts — use the most recent
+one — stops working the moment the account is created, and ten wrong guesses
+from one address lock that address out of setup for fifteen minutes.
+`hack/install.sh` prints the link for you when it finishes a fresh install —
+`https://` once `http_tls_cert` is set — taken from that start's own output, so
+re-running it to upgrade an install whose administrator already exists prints
+no setup link at all rather than a stale one from the first start.
+
+Secret settings (sign-in client secrets, the Apple key, the Steam key, the seed publish token) are
+encrypted in the database under `<data_dir>/pki/settings.key`, created on first start. Back it up
+with the rest of `pki/`: a database restored without it keeps everything else but reads those
+credentials as unusable until you enter them again on the Settings page. `pki/device.key`, also
+created on first start, seals the cookie a browser gets after signing in with a password, which
+keeps that browser able to sign in while someone is guessing passwords against the account from
+elsewhere; losing it only means each browser is treated as new until it next signs in.
+
+Sessions sign out after 12 hours unused and 30 days regardless; both are
+**Sign-in** settings (`auth.session_idle_hours`, `auth.session_max_days`).
+Sensitive actions — changing who can do what, credentials, rotations,
+enrollment tokens, updates, deleting a server or cluster — ask you to confirm
+your password (or a linked sign-in provider) if you have not done so in the
+last ten minutes.
 
 ## 3. Enroll a node
 
@@ -507,6 +680,27 @@ happens on that start rather than when you choose it. And a control plane with
 no outbound network gets no seeds this way at all: place the bundles in
 `seeds_dir` by hand instead.
 
+### Updating past the addon origin change: addon tabs need configuring
+
+From this release, an addon's web UI (a seed's database admin or map tab) is no longer served
+from the UI's own address (ADR-182). This is a deliberate breaking change: after updating, every
+addon tab shows a notice saying addon web UIs are turned off, and any bookmark to a
+`/servers/<id>/addon/<role>/proxy/...` address returns 404. **Game servers, their addon containers
+and their data are untouched;** only how the browser reaches the addon's page changed.
+
+To get addon tabs back:
+
+1. Pick a host name for the addon origin, same-site with the UI — `addons.ygg.example.com` beside
+   `ygg.example.com`, say (see "Addon web UIs: a second origin" above for why a host name beats a
+   port).
+2. Add `addon_http_addr` and `addon_public_url` to `yggd.yaml`.
+3. Behind the Cloudflare tunnel, add that host name to the tunnel's ingress pointing at
+   `addon_http_addr`, under the same Access policy; on a LAN, give it a DNS record (and a
+   certificate covering it, if `yggd` serves TLS itself).
+4. Restart `yggd`, then reopen the addon tab.
+
+A seed's addon auto-login (`ui.login`) keeps working with no change to the seed.
+
 ### `yggd`
 
 Set `update_channel` (config key or `YGG_UPDATE_CHANNEL`) to `develop`,
@@ -521,8 +715,10 @@ channel that has fallen behind reads **Behind** and offers nothing — so
 following `main` while running a `develop` build never invites a downgrade.
 Clicking it downloads the build,
 verifies it against the release's published `SHA256SUMS` (the same check
-you'd run by hand below, just automated — no separate signing key), swaps
-it into place, and restarts `yggd`. This requires `Restart=always` in the
+you'd run by hand below, just automated) — and, once a release signing key is
+compiled in, checks the publisher signature on that `SHA256SUMS` first (see
+[Release signing](#release-signing)) — swaps it into place, and restarts
+`yggd`. This requires `Restart=always` in the
 systemd unit (the example above already has it); without it, the binary
 still gets installed but nothing brings the process back up, and the page
 says so.
@@ -558,6 +754,15 @@ still published. Restoring saves the outgoing build the same way, so you can
 bounce between channels freely. An ordinary update archives the build it
 replaces too, so that is a rollback point as well. The switch is written back
 to `yggd.yaml` for you, so it survives a restart.
+
+**Rolling back to a build older than 0.64 needs your secret settings
+re-entered.** From 0.64 secret settings are stored encrypted (`enc:v1:...`,
+under `pki/settings.key`). An older build does not know that format and reads
+the stored ciphertext as the literal value, so sign-in providers, the Steam key
+and the seed publish token stop working on it until you enter them again on its
+Settings page. Everything else — accounts, sessions, servers — keeps working
+across the rollback, and moving forward again re-encrypts whatever was
+re-entered.
 
 `update_channel` is unset by default — this is opt-in, and the page's off state
 has buttons to start watching a channel (and a link to stop again) rather than
@@ -597,10 +802,13 @@ same button on each row as a shortcut. Nothing else on that host is touched —
 Docker owns the container lifecycle, not the agent (ADR-012), so a restarting
 agent never stops a game server.
 
-There is still no CI-to-control-plane signing pipeline (ADR-040 explains why:
-keeping the signing key out of CI entirely is the point) — fetching only
-gets you the checksummed bytes; this control plane still does its own local
-signing after either fetching or uploading. A fetched binary's version is
+The control plane's own signing key never leaves it (ADR-040): a node pins
+that key, and this control plane signs every binary it registers, fetched or
+uploaded. A fetched binary is checked first against the release's
+`SHA256SUMS` and — once a release signing key is compiled in — against the
+publisher signature on that `SHA256SUMS` and on `releases.json` (see
+[Release signing](#release-signing)), so the control plane only ever vouches
+for bytes the project's own CI built. A fetched binary's version is
 read automatically from the release's own manifest, so it always matches
 what the binary actually reports. An uploaded binary's version is whatever
 you type in the upload form instead — it cannot be read automatically from a
@@ -624,3 +832,96 @@ Either way, restarting `ygg-agent` does not stop any game server, for the
 same ADR-012 reason. Both binaries reconnect/resume on their own; there is
 no ordering requirement between updating the control plane and updating any
 given node.
+
+## Release signing
+
+A release carries `SHA256SUMS.sig` and `releases.json.sig`: ed25519 signatures,
+made in CI, over the release's checksum manifest and its version manifest
+(ADR-183). `yggd` checks them before a self-update or an agent-binary fetch,
+against public keys compiled into the binary
+(`internal/shared/releasesig/keys.go`). Without them, an update is trusted
+because it matches a `SHA256SUMS` published in the same release — so anyone
+able to publish a release could ship a matching binary and checksum together.
+
+**Until a key is compiled in, nothing is checked**: updates work exactly as
+before, and `/updates` and the startup log both say signatures are not
+checked. Once one is, `yggd` refuses an update or a fetched agent binary whose
+signature is missing or invalid and says which file and why — and the release
+workflow refuses to publish without a signature, so a signed channel cannot
+quietly go unsigned.
+
+### Creating the key (once)
+
+This is done by whoever maintains the source repository's CI. The private key
+only ever exists on your machine and in the Actions secret; never commit it.
+
+1. Generate a keypair from a checkout of the source repository:
+
+   ```bash
+   go run ./hack/releasesign keygen
+   ```
+
+   It prints a public key (a quoted base64 string) and a private key (an
+   unquoted base64 string). Nothing is written to disk. Keep an offline copy
+   of the private key somewhere safe — losing it means rotating to a new one.
+
+2. Store the private key as an Actions secret on the **source** repository
+   (the one whose `release.yml` publishes, not the public release repository),
+   **before** step 3:
+
+   ```bash
+   gh secret set YGG_RELEASE_SIGNING_KEY --repo arasoi/yggdrasil
+   # paste the private key at the prompt
+   ```
+
+   From then on releases are signed, though nothing checks them yet: the
+   workflow logs a warning saying so.
+
+3. Add the public key to `trustedKeys` in
+   `internal/shared/releasesig/keys.go`, exactly as `keygen` printed it:
+
+   ```go
+   var trustedKeys = []string{
+       "BASE64PUBLICKEY=",
+   }
+   ```
+
+   Commit it on a feature branch and merge it the ordinary way. From the
+   commit that adds it onward, the release workflow fails rather than publish
+   unsigned, and every `yggd` built from it enforces signatures.
+
+4. Update each control plane once. The update that *installs* the first
+   enforcing build is itself checked by the build being replaced, which has
+   no key, so it is trusted on the checksum alone, as before; every update
+   after it is checked. To check that first one by hand, download the release
+   and run, from a checkout at the commit that added the key:
+
+   ```bash
+   go run ./hack/releasesign verify -tag release-latest SHA256SUMS releases.json
+   ```
+
+   (substituting the tag of the channel you downloaded), which checks
+   `SHA256SUMS.sig` and `releases.json.sig` beside those files against the
+   compiled-in keys — then `sha256sum -c SHA256SUMS --ignore-missing` as usual.
+
+### Rotating the key
+
+`keys.go` may list several public keys, and the secret may hold several
+private keys separated by whitespace; a release is then signed once per key,
+one line each in the `.sig` file, and accepted by any build trusting any one
+of them.
+
+1. `go run ./hack/releasesign keygen` for the new pair.
+2. Set the secret to *both* private keys, old then new, separated by a
+   newline: `gh secret set YGG_RELEASE_SIGNING_KEY --repo arasoi/yggdrasil`
+   and paste both.
+3. Add the new public key to `trustedKeys` alongside the old one, merge, and
+   update every control plane.
+4. Once every control plane in use runs a build that trusts the new key,
+   remove the old public key from `trustedKeys` and the old private key from
+   the secret.
+
+If a private key leaks, do the same but remove the leaked public key in the
+same commit that adds the new one, and set the secret to the new key alone;
+a control plane still on a build that trusts only the leaked key needs one
+update checked by hand (step 4 above) to cross over.
