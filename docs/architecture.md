@@ -528,9 +528,11 @@ itself (ADR-080) and is where one is managed (ADR-066): rename it, add or remove
 it up, set its schedule, or delete it. It needs no new query beyond the eligible-member list —
 the same data the list already gathers for every cluster, gathered for one — and shows its
 members as the same art cards the fleet uses, since a cluster's members are peers with their own
-pages. Its overflow menu also reaches `/clusters/{id}/settings` and `/clusters/{id}/files`
-(ADR-105) — its values and its shared volume, the two things that exist at the cluster level
-rather than on any one member.
+pages. Its section tabs — Overview, Settings, Files, Access, each gated on its own permission
+the way a server's are (ADR-187) — reach `/clusters/{id}/settings` and `/clusters/{id}/files`
+(ADR-105), its values and its shared volume, the two things that exist at the cluster level
+rather than on any one member; they used to sit in the overview's overflow menu, with no way
+across between them.
 
 Every operation there is guarded by something the schema does not enforce, because
 `servers.cluster_id` has no foreign key: deleting a cluster is refused while it still has
@@ -1257,6 +1259,39 @@ permissions, and still does) — so a plain Viewer's rail is scoped to Fleet alo
 four destinations (Servers, Clusters, Players, Jobs) stay unconditional, since a Viewer must
 still see them and nobody asked to restrict anything further.
 
+**The never-a-button-that-403s rule holds on every page, not only the detail pages** (ADR-187).
+/clusters, /installs, /nodes, /nodes/{id}, /seeds and /allocations used to render every mutating
+control to whoever could open them, so a custom role holding only `installs.view` met a Delete
+that refused it. Each page now gates its controls on one permissions view built per request —
+`navView.Can` for the fleet-wide capabilities, `clusterTabPerms` per cluster row from the same
+bulk-loaded assignments the list already filters by — and a view-only role sees no form on any of
+them but sign-out. **A refused server action re-renders the page it came from** — Overview,
+Backups, Settings, /installs or the fleet card that posted it, chosen by the form's own `origin`
+field — where it used to drop the operator onto the fleet page under the server's URL.
+
+**A section that appears on more than one page is one partial** (ADR-187): the file browser and
+editor (server and cluster alike, so a cluster's upload gained ADR-146's extract option the copy
+had missed), the access-grants card, the cluster create form and delete dialog, the backup
+schedule form, the facts and resource-history cards, the node groups on the fleet, players and
+allocations pages, and the "how do you want to start" chooser New server and New role share.
+
+**Every page is composed from one component library** (ADR-184). `templates/components.html`
+holds the shared pieces — the page shell (`pageStart`/`pageEnd`, which give every page a skip link
+and a `<main>` landmark), the breadcrumb (`crumbBar`), the page head, feedback banners
+(`alert`/`flash`), status strips (`banner`), stat tiles, card heads, empty states, one-button POST
+forms (`postButton`, which emits a confirmation's data attribute and its hashed fallback
+together), overflow menus, dialog heads, entity links, the seed glyph and a named icon set — and
+`components_test.go` fails when a page writes one of those by hand again. One button vocabulary,
+one alert shape and a type/spacing token scale replace the per-page variants that had drifted
+apart, and a server sub-page's breadcrumb and tab strip render from one `serverChromeView` built
+in Go, labels translated. No template or script writes an inline style any more — a seed's accent
+is a generated `.game-h<deg>` class and its artwork an `<img>` — so the CSP's `style-src` refuses
+inline styles everywhere except the four pages that load a vendored editor, which Monaco and
+xterm.js need. The hand-written scripts share `static/ygg.js` for their websocket backoff,
+fragment polling, focus-preserving swaps, theme detection and storage access; a live-region swap
+gives keyboard focus back to the element it replaced, and skips a region whose fetched markup has
+not changed.
+
 **Every server has a page** at `/servers/{id}`: a breadcrumb, a tab strip shared by Overview,
 Console, Files, Backups and Settings, and lifecycle controls that stay visible across all five. Before
 this, those were three unrelated top-level pages reached from a table row, with nothing on
@@ -1289,6 +1324,21 @@ and every writable path is a bind mount from the server's own directory. A port 
 blank takes the next free port in the node's range; a derived port is shown but not editable.
 Only one rebuild of a server runs at a time: a second — a double-clicked Rebuild, or a settings save
 landing while one is in flight — is refused before it writes or stops anything (ADR-179).
+
+**The page says what saving will do before it does it** (ADR-186). The sticky save bar states
+the consequence worked out from the server's state — a running server is stopped and started
+again, a stopped one stays stopped, a pending seed update (and, when its install block changed,
+a fresh download) comes along — and Save confirms in the same words, as the Overview's Rebuild
+always did. With the node offline Save is disabled with the reason beside it. Two saves do not
+rebuild at all: the display name is its own small form (a name reaches nothing in the pod), and
+a save whose variables, settings, add-ons and ports all match what is stored only says so. A
+rejected save re-renders what the operator submitted, every control refused marked by its label,
+with a banner saying nothing was saved — rather than rebuilding the form from stored state and
+discarding a long form's edits. The same holds on a cluster's settings page, whose override
+toggles read as the cluster's ("Managed for every member") rather than a member's, and on the
+creation form, which keeps its name, node and cluster, can be built against a chosen cluster so
+its controls show what the new member inherits, and lands on the new server's own page. All of
+these forms share one section order and one set of partials (conventions.md's Settings-forms row).
 
 **A seed's controls are tabbed once there are enough of them, and the page is searchable**
 (ADR-085) — a vertical tab rail beside one panel per group once a seed declares four or more
@@ -1877,8 +1927,8 @@ default and falls back to the raw-YAML pane — the same discipline conventions.
 fallback, and both routes converge on the same `internal/seed.Parse` and `Validate` every seed
 loads through.
 
-**The editor is organised into five tabs — Identity, Art, Runtime, Networking, Install — beside
-a validation rail**, a visual pass over the same form above rather than a new one (ADR-079's
+**The editor is organised into tabs beside
+a validation rail** (six since ADR-185 — see below), a visual pass over the same form above rather than a new one (ADR-079's
 amendment). Every tab's fields stay in the one `<form>` regardless of which is showing —
 `static/seedtabs.js` toggles `hidden` client-side, so a hidden tab's inputs still submit and the
 page is every field, unfiltered, with the script absent. The rail runs the same `Validate` a save
@@ -1886,7 +1936,7 @@ already gates on (at most one error, since `Validate` fails fast at its first pr
 `seed.Lint` warning, and a tab's own count badge is the same two checks re-grouped by which tab
 each one's field name points at — approximate, since `Validate`'s error text is a sentence with a
 topic prefix and not a structured path, but a hint costs nothing a save does not already need.
-Runtime carries a **resolved command preview**: the primary container's command rendered against
+The rail carries a **resolved command preview**: the primary container's command rendered against
 every declared variable, setting and port default (`seed.MergeStored` plus the same
 preview-before-allocation rendering server creation already does), so an author sees what a fresh
 server would run without creating one. The Install tab's own footer is deliberately **Validated**,
@@ -1904,8 +1954,10 @@ associated to the outer form via `form="seedform"` rather than nested inside it 
 two-forms-cannot-nest rule, ADR-079): nesting would mean the dialog's own `<form method="dialog">`
 close button falls back to submitting the outer form instead of dismissing the dialog.
 
+**ADR-185 reorganised the editor's layout and flow without changing a field name.** The tabs are Identity, Art, Containers (containers, readiness, crash, stop, log rules), Configuration (variables, groups, settings, config files, migrations), Install and Storage and network (writable paths, backup, cluster, connect) — the old Runtime tab held eleven sections and Networking two. Each checks-rail item links to the field it is about rather than only its tab, and presentation suggestions are kept apart from warnings. Every repeatable row can be moved up or down (renumbering its fields, since the decoder orders by index), removed, and — for variables, settings, containers, steps, config files and migrations — folded, with a filter and Expand/Collapse all on a long list; a card's title follows what is typed. Save is sticky, the page warns before unsaved changes are lost, and a save lands back on the seed's own editor, on the same tab, with a notice. The raw YAML pane became an explicit Form | YAML switch that converts on the server and writes nothing, so the two can no longer hold different edits; a pasted seed that fails to save stays visible beside its error. The artwork dialog sits outside the form, so closing it can no longer submit the seed. The install step's app id has a *Look up on Steam* button again (the cached `/seeds/steam-lookup` the chooser uses, reporting the app's name and whether it has a Linux build) and a SteamDB link, and the chooser's Steam start stores the app id for artwork and picks `steamcmd-proton` for a Windows-only app. Below 1100px the rail moves above the form, and nothing on the page is wider than a 375px viewport.
+
 **`/seeds/new` is a chooser before it is a form**: from a Steam app id (looks up the same
-`internal/control/steam` lookup the guided form's own "Fetch from Steam" button already calls, and
+`internal/control/steam` lookup `/seeds/steam-lookup` serves, and
 seeds an `install.steps` steamcmd op from it), duplicating an existing seed (install, containers,
 variables and settings carry over; branding does not, since the bytes live under the source seed's
 own id and copying only the filenames would point at images that do not exist for the new one), a
@@ -1972,10 +2024,13 @@ account authenticates fine and is exactly the misconfiguration that otherwise su
 publish much later. This is the first credential `yggd` holds that lets it write somewhere outside
 itself; every other one is inbound-facing or read-only.
 
-ADR-051's Steam integration is built: a "Fetch from Steam" button next to the SteamCMD app id
-field (`internal/control/steam`, called from `internal/control/web/steam_lookup.go`) queries two
+ADR-051's Steam integration is built: `/seeds/steam-lookup` (`internal/control/steam`, called
+from `internal/control/web/steam_lookup.go`; called by the `/seeds/new` chooser's Steam card and,
+since ADR-185, by a "Look up on Steam" button beside a steamcmd install step's app id, which
+replaced the button whose orphaned script ADR-184 deleted) queries two
 real sources — Steam's public, unauthenticated Store API for a name, description, and header
-image (used to prefill the Icon field, since it is already a plain `http(s)://` URL), and a local
+image (no longer made the seed's icon: the Art tab's picker offers an image shaped for each
+slot, ADR-185), and a local
 `steamcmd +app_info_print` for whether a Linux depot exists at all, the same authoritative check
 ADR-047's own development used by hand for Valheim's app id. Results are cached in memory per app
 id for an hour and the lookup is entirely on-demand — clicking the button, never a background
@@ -2575,9 +2630,9 @@ delegated it. Admin is exempt from both.
 `serverFromPath`/`clusterFromPath` carry the check: both take a single permission string and
 resolve access before returning the row, so a route that forgets to declare one is a compile
 error rather than a silently-unguarded endpoint. A server's own page gets a sixth, conditional
-Access tab (`serverTabs`, gated on being able to use it); a cluster's Access link joins the
-existing Settings/Files entries in its page's overflow menu, each entry itself now conditional
-on the specific permission it needs (ADR-161's UI audit) rather than always rendering.
+Access tab (`serverTabs`, gated on being able to use it); a cluster's Access tab joins its
+Settings and Files tabs (`clusterTabs`, ADR-187), each conditional on the specific permission it
+needs (ADR-161's UI audit) rather than always rendering.
 
 Creating a server or cluster assigns the creator the built-in Owner role on it immediately,
 regardless of their global role — creation itself stays gated on `servers.create`/
