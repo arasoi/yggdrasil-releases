@@ -285,15 +285,36 @@ duplicate, with the operator sent back to the server's own page on success
 `Install.UpdateBadgeTitle`/`VersionCheckBadgeTitle` live on `store.Install` itself for this
 reason, so both pages read one string rather than two that could drift.
 
-**An install-update failure naming a SteamCMD app "state 0x6" after the job is a known, specific
-symptom, not a generic error** — SteamCMD writes `StateFlags`/`UpdateResult` 6 into
-`appmanifest_<appid>.acf` on a failed update (a full disk is the common cause, though a
-permissions or connectivity failure produces the identical state) and reads that *stale* state
-back on every later attempt, aborting immediately without even trying a download — so an
-ordinary Retry, which deliberately trusts SteamCMD's own `validate` to reconcile in place
-(ADR-091), cannot recover from it even once the underlying cause is fixed. **Force clean**
-(ADR-142) is the existing, correct recovery: it wipes the directory, poisoned manifest included,
-before the next attempt.
+**An install-update failure naming a SteamCMD app "state 0x6" after the job is a symptom, and
+SteamCMD's own log names the cause** (ADR-189, correcting ADR-173). SteamCMD writes
+`StateFlags`/`UpdateResult` 6 into `appmanifest_<appid>.acf` on a failed update and reads that
+stale state back on later attempts. On this project's production fleet the cause turned out not to
+be disk space at all but Steam refusing anonymous access to a depot's manifest (`'Access Denied'`
+in `content_log.txt`, reported by SteamCMD as "No connection") — something no re-download fixes.
+**Every steamcmd run now keeps that evidence**: `RunOnceSpec.Collect` copies the tail of
+`/opt/steamcmd/Steam/logs/content_log.txt` and `stderr.txt` out of the exited container before it
+is removed (a copy, not a bind mount, so the image's own tree is untouched and stays runnable as
+any uid), the agent reads the manifest, and both travel on the job (`InstallProgress.steamcmd`,
+protocol 17; `jobs.steamcmd`). The diagnosis is classified from the log first
+(`internal/shared/steamstate`), with StateFlags as best-effort secondary context, and `/jobs`,
+`/installs` and a server's failed-install banner show the cause, the raw values, and the log
+behind a disclosure. **Force clean** (ADR-142) is the recovery only when the cause is one a fresh
+download gets past; for Access Denied or Missing configuration it would delete working files and
+then fail to fetch them, so its confirmation says so and a stuck install does not suggest it.
+
+**A failing install backs off instead of being re-attempted forever** (ADR-189, amending ADR-171).
+The update poller used to re-trigger a failed install on every check, stopping its servers for up
+to 45 seconds each time before SteamCMD failed again within seconds. Every install failure now
+counts against `installs.consecutive_failures` and opens a window (`next_auto_attempt_at`) of 6,
+12, then 24 hours; a fourth failure stops automatic attempts and the install reads **stuck** on
+`/installs` and the server page, with Retry (and Force clean, where it can help) as the recovery.
+The poller keeps running the read-only check for a failed install so its badge stays current, but
+never dispatches one whose window is open, which is stuck, or whose failure predates backoff;
+`TriggerInstallUpdate(ctx, id, automatic)` refuses such an automatic attempt itself before stopping
+anything, while a manual click always proceeds. Success, and an operator's Update, Retry or Force
+clean, reset the count. The stuck state is a badge, not part of the fleet's "needs attention"
+rollups: ADR-143's `Stuck()` is about a *server's* desired and observed state, and a server on a
+stuck install is usually running fine on its old files.
 
 **An install job's completion provisions before it restarts anyone waiting on it** (ADR-126).
 `handleInstallProgress`'s success case reconciles (provisions whatever needs it) before restarting
