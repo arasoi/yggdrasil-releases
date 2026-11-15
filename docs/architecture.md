@@ -165,6 +165,30 @@ passed, after each swap, on the swap waiter's two-minute tick (everything unpinn
 node), and before a staging is refused for space. No new poller. Library directories sit under
 `installs_dir`, which no backup ever includes (ADR-023).
 
+**`/installs` is the library, and a build can be rolled back to, pinned, applied or cancelled**
+(ADR-193). The page groups every build by node, then game, then install recipe (fingerprint) —
+a Rebuild onto a changed install block stages a build of a new recipe beside the old one's, so a
+game on a node can hold more than one lineage — and reads each recipe as a lineage: current,
+the staging beside it, previous builds newest first, failed stagings kept for their diagnosis.
+Each build shows its role, Steam buildid, size, age and retirement, the servers on it (only those
+the viewer may see, the rest counted), and whether it was cloned from build N or downloaded
+fresh; node and game filters join the state filter. **Roll back** makes a ready previous build of
+the seed's current recipe current again in one transaction (`PromoteForRollback`, which re-checks
+the build still exists, so a racing prune is refused rather than half-applied) and moves the
+servers on the current build onto it through the update swap: Stop, Destroy, repoint, Provision,
+Start, a restart each, nothing downloaded. Automatic updates are paused on the restored build with
+a note saying why, or the poller would fetch the build just rolled back from; the update badge
+still shows the newer build. A per-server recipe rolls back one server's own build; a build of a
+recipe the seed no longer declares is not offered, since its next Rebuild would move it forward
+again. **Pin** keeps a build whatever the retention setting. **Apply now** switches in a
+downloaded update waiting for players (`/installs/{id}/apply-now`; the older `update` route still
+does the same). **Cancel staged update** discards a staging: one downloaded or waiting is deleted
+and reclaimed with its swap ended; one still downloading is marked failed and reclaimed when the
+agent's job ends, which the hub recognises by `store.StagingCancelledError`. None counts as a
+failure. A server's page shows its Game build (buildid, installed, size), Roll back to build N in
+its ⋯ menu, and the staged-update banner with Cancel and Apply now, worded as a rebuild for a
+Rebuild's staging.
+
 **An install update is staged beside the live install and swapped in with a restart**
 (ADR-191). Update install, the update poller and Reinstall (formerly Force clean) create a
 `staged` build and an `install_stage` job: a clone of the live build updated in place, or a fresh
@@ -2735,7 +2759,9 @@ targets an existing account — granting access to someone not yet invited means
 `/allocations` and `/installs` are **not** scoped by any of this — neither can be narrowed to
 specific nodes or installs the way a server or cluster can be, a stated limitation rather than a
 silent gap — and each needs its own fleet-wide `*.view` permission to open at all (ADR-168,
-"Operator UI shape" above). Nodes, seeds, and installs carry no per-resource role model at all.
+"Operator UI shape" above). The one exception is the names of the servers on each build, which
+`/installs` lists since ADR-193: only the servers the viewer may see are named, the rest counted.
+Nodes, seeds, and installs carry no per-resource role model at all.
 `/players` and `/jobs` stay open to any authenticated user, but **their rows are scoped** (ADR-179):
 `/players` shows only players on servers the user can see, and `/jobs` shows a server or cluster job
 only when its target is visible to the user, an install job only with `installs.view` and an agent
