@@ -348,12 +348,29 @@ plane's own memory of the last value it applied or first observed: the first che
 against an install establishes that baseline rather than flagging an update, an ordinary check only
 advances the recorded upstream value, and a fetch or parse error leaves both values exactly as they
 were rather than zeroing them, since zeroing a memory-based value would erase something nothing
-else re-derives. Applying a detected update is not a re-run of an install step the way Steam's is —
-it rewrites the declared variable's value on every server referencing the install (in practice
-always exactly one, since `version_check` is refused on a shared install) and rebuilds each one
-through the same destroy-and-re-provision path a manual per-server Rebuild already uses, gated the
-same player-online check Steam's own auto-apply uses. `/installs` shows the identical column shape
-for both mechanisms, mutually exclusive per install.
+else re-derives. `/installs` shows the identical column shape for both mechanisms, mutually
+exclusive per install.
+
+**Applying a version-check update stages it beside the running server, exactly as a Steam update
+is staged** (ADR-194, amending ADR-172). It used to rewrite the declared variable and rebuild the
+server with the same install row re-fetched in place, so the server was down for the whole
+download and a failed fetch left it with no files. Now `ApplyVersionCheckUpdate` renders the
+install's steps with the variable set to the upstream value and stages a fresh build (never a clone:
+a download or extract clears its directory first, ADR-091) through ADR-191's
+`stageInstallUpdate`, recording that value as the staged row's `version_check_installed`. Nothing
+is stopped and no server is written. Once the download is verified the swap writes the variable,
+and the command it renders, onto the server — after Destroy, before the repoint — and provisions
+the pod onto the new build: only a restart's downtime. A failed download leaves the variable as it
+was and the server on the version it had. Promotion keeps the staged row's own
+`version_check_installed`, so "installed" moves exactly when the server does. A manual apply swaps
+as soon as the build is ready; the poller's automatic one stages whoever is online and its swap
+waits for no player to be online (the gate moved from the poller to swap time, as Steam's did), and
+Apply now, Cancel staged update and the per-install update lock all apply unchanged. Every staging
+of a `version_check` seed (an Update, a Reinstall, a Rebuild onto a new recipe) records the
+variable's value it was rendered with, so a swap never writes back a version inherited from the
+build it replaces. A download build a swap replaces is **not** kept for rollback: rolling back
+would put the old files under a variable that names the new version, so it is offered neither
+rollback nor pin and is removed once its grace period has passed, whatever the retention setting.
 
 **Both mechanisms' badge and action also surface on the server they belong to, not only on
 `/installs`** (ADR-173). A server's own page resolves the same `SteamCMDCheckTarget`/
