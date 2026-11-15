@@ -147,8 +147,25 @@ The agent can fill an empty install directory by **cloning** another install on 
 hardlink, built beside the target and renamed into place, with free space checked against a
 reserve kept for running servers, and the source only ever read. This is the foundation for
 side-by-side updates, where the new version is built beside the running one and servers are
-switched to it with only a restart; in this release nothing stages or clones yet, and every
-update still runs in place as described below.
+switched to it with only a restart.
+
+**An install update is staged beside the live install and swapped in with a restart**
+(ADR-191). Update install, the update poller and Reinstall (formerly Force clean) create a
+`staged` build and an `install_stage` job: a clone of the live build updated in place, or a fresh
+download (after two consecutive failures, for a reinstall, for a failed live install, or on an
+agent too old to clone). Nothing is stopped while it downloads. The hub verifies the result
+(manifest read, `StateFlags` 4, the targeted buildid reached) before it counts; a failure fails
+only the staged build and backs off the live install, and touches no server. Once verified, an
+`install_swap` job promotes the staged build to current (the old one becomes `previous`) and
+moves each server onto it one at a time, under its rebuild lock: Stop, Destroy, a
+compare-and-swap repoint of `install_id`, Provision, and Start if it was meant to run — the same
+ordering a Rebuild uses, so a player loses a restart, not the download. An automatic update's
+swap waits while players are online (`SwapWaiter` re-checks every two minutes); an operator's
+applies at once. Cluster members on per-server installs switch together. Members, progress and
+the swap job survive a control-plane restart and resume on the node's reconnect; desired state is
+never changed, so every crash point converges through the existing reconcilers. The legacy
+in-place update remains for one release, offered only when staging is refused for disk space.
+Previous builds stay until an operator deletes them; reuse and retention are the next phase.
 
 **Server** — the managed unit. What you start, stop, back up, and open a console on.
 **Every server is a pod of one or more containers**, with exactly one marked primary.
@@ -216,7 +233,9 @@ describes, one layer further down the stack, where an image gives the seed no le
 all rather than the wrong one.
 
 **Job** — a long-running operation with streamed progress: install, install update, backup,
-restore, server move, agent update. One mechanism rather than six (ADR-021).
+restore, server move, agent update. One mechanism rather than six (ADR-021). A side-by-side
+update adds two (ADR-191): the staged build's download (`install_stage`) and the build switch
+(`install_swap`), the one job the control plane runs itself rather than dispatching to a node.
 
 **An install stuck by a control-plane restart self-heals**, up to a bounded number of attempts,
 and stays repairable by hand past that (ADR-106). `ReconcileInterruptedInstalls` (ADR-021,
@@ -239,7 +258,10 @@ install the state machine still calls `Ready`, and is refused only while a job i
 active on it. Deleting the install and letting it be recreated — ADR-091's own suggested
 escape hatch — was never actually reachable for this case, since `DeleteInstall` refuses
 unconditionally while any server still references it (ADR-018); Force clean is what that
-suggestion needed and did not have until now.
+suggestion needed and did not have until now. **Since ADR-191 it is "Reinstall side by side"**:
+the fresh download goes into a staged build beside the live one and is swapped in like any
+update, so the live files are kept until the new copy is verified, and it no longer refuses
+while servers run.
 
 **A steamcmd install can be checked for an upstream Steam update, manually or on a schedule, and
 optionally updated automatically** (ADR-171). "Update install" was, until this, a blind trigger —
@@ -259,7 +281,9 @@ used — unless a server referencing the install is both running and, per its se
 `join`/`leave` player tracking, currently has someone online, in which case the apply waits and
 is re-evaluated on the next check rather than bouncing an active session. A seed with no player
 tracking at all is not held to that standard — there is no way to know, so it proceeds — an
-explicit tradeoff, not an oversight. Scoped to `steamcmd`-method installs on a non-beta branch;
+explicit tradeoff, not an oversight. Since ADR-191 the poller stages the update whatever players
+are doing, since staging is invisible to them, and this player gate is applied at swap time
+instead. Scoped to `steamcmd`-method installs on a non-beta branch;
 `download`/`extract`/`load_image` installs have no seed-declared version concept to check
 against, and a beta branch has no verified way yet to check without risking the wrong build.
 
@@ -314,9 +338,10 @@ any uid), the agent reads the manifest, and both travel on the job (`InstallProg
 protocol 17; `jobs.steamcmd`). The diagnosis is classified from the log first
 (`internal/shared/steamstate`), with StateFlags as best-effort secondary context, and `/jobs`,
 `/installs` and a server's failed-install banner show the cause, the raw values, and the log
-behind a disclosure. **Force clean** (ADR-142) is the recovery only when the cause is one a fresh
-download gets past; for Access Denied or Missing configuration it would delete working files and
-then fail to fetch them, so its confirmation says so and a stuck install does not suggest it.
+behind a disclosure. **A reinstall** (ADR-142's Force clean) helps only when the cause is one a
+fresh download gets past; for Access Denied or Missing configuration it fails the same way, so its
+confirmation says so and a stuck install does not suggest it. Since ADR-191 it builds beside the
+live files, so a failed reinstall no longer leaves servers with nothing.
 
 **A failing install backs off instead of being re-attempted forever** (ADR-189, amending ADR-171).
 The update poller used to re-trigger a failed install on every check, stopping its servers for up
@@ -328,7 +353,8 @@ The poller keeps running the read-only check for a failed install so its badge s
 never dispatches one whose window is open, which is stuck, or whose failure predates backoff;
 `TriggerInstallUpdate(ctx, id, automatic)` refuses such an automatic attempt itself before stopping
 anything, while a manual click always proceeds. Success, and an operator's Update, Retry or Force
-clean, reset the count. The stuck state is a badge, not part of the fleet's "needs attention"
+clean, reset the count. Since ADR-191 a failed staging counts against the live install it was
+staged for, so the same windows apply, and an attempt no longer stops anything in the first place. The stuck state is a badge, not part of the fleet's "needs attention"
 rollups: ADR-143's `Stuck()` is about a *server's* desired and observed state, and a server on a
 stuck install is usually running fine on its old files.
 
