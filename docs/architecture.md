@@ -149,6 +149,22 @@ reserve kept for running servers, and the source only ever read. This is the fou
 side-by-side updates, where the new version is built beside the running one and servers are
 switched to it with only a restart.
 
+**A node keeps an install library, and a Rebuild downloads beside the running server**
+(ADR-192). The `previous` builds a swap or a Rebuild leaves behind, and a per-server build whose
+server was deleted or moved, are the node's library: a new install of the same recipe (creation,
+a move's target, a realign) starts as a clone of the newest one with the same render key, so
+SteamCMD fetches only what changed since; a shared seed whose only builds are previous gets a new
+current one cloned from the newest. Download/extract recipes are never cloned or kept. A Rebuild
+plans its install before stopping anything: when the seed's install recipe changed and the server
+is running a pod on a ready install, the new install is staged beside it like an update and the
+swap rebuilds the pod onto it, so the server is down for a restart, not the download; a cluster
+rollout's later members join the first member's staging. Retention is the
+`installs.keep_previous_builds` setting (0–10, default 1, per node and recipe, pinned builds
+aside); `PruneInstallLibrary` removes the rest once nothing uses them and a ten-minute grace has
+passed, after each swap, on the swap waiter's two-minute tick (everything unpinned on a disk-low
+node), and before a staging is refused for space. No new poller. Library directories sit under
+`installs_dir`, which no backup ever includes (ADR-023).
+
 **An install update is staged beside the live install and swapped in with a restart**
 (ADR-191). Update install, the update poller and Reinstall (formerly Force clean) create a
 `staged` build and an `install_stage` job: a clone of the live build updated in place, or a fresh
@@ -445,7 +461,9 @@ not travel, so the source's copy is immediately unreferenced), and on a failed c
 *shared* install at refcount zero is deliberately kept as the cached depot the next server from
 that seed reuses, staying on `/installs` with its server count reading zero rather than being
 removed. The distinction was missed when the list above was drawn up, and a per-server install
-stranded 19 GB on every ordinary delete before it was added.
+stranded 19 GB on every ordinary delete before it was added. Since ADR-192 a ready per-server
+steamcmd build is kept as a library build when its server goes, and removed by retention rather
+than at once; a shared build the seed's recipe has moved on from goes to the library too.
 
 Reclamation is best-effort: a pre-protocol-4 agent ignores `ReclaimData`, so a caller logs the
 failure and still deletes the row rather than refusing — the cost is an orphaned directory an
@@ -2463,7 +2481,7 @@ surfaced on `/settings` with a link but stay owned by their own pages, since swi
 action rather than a stored value (ADR-056).
 
 The table is key/value; what a key *means* lives in `internal/control/settings` as a registry of
-typed `Definition`s. Twenty-four ship, each with a live consumer — the ten provider Sign-in
+typed `Definition`s. Twenty-five ship, each with a live consumer — the ten provider Sign-in
 settings (ADR-115, read fresh by `loadProviderSettings` on every login), the two session limits
 `auth.session_idle_hours` and `auth.session_max_days` (read by the authenticator on every
 request through the function `web.New` installs, ADR-181), and these: `log.level` (the
@@ -2477,6 +2495,7 @@ ADR-134), `ui.language` (ADR-086), `steam.api_key`, `steam.update_check_interval
 `installs.version_check_interval_hours` (read by `gameupdate.VersionChecker` the same way, its own
 independent poller and its own longer default since an arbitrary third-party API has no
 established rate-limit headroom, ADR-172),
+`installs.keep_previous_builds` (read by `web.PruneInstallLibrary` on every prune, ADR-192),
 `seeds.catalog_repo` (ADR-081), and the pair
 that lets this control plane publish its own seeds, `seeds.publish_repo` and
 `seeds.publish_token` (ADR-079) — the first credential here that writes outside this deployment,
