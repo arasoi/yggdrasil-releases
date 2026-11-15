@@ -116,6 +116,14 @@ must not be confused (conventions.md's node-capacity rules cover the unknown-vs-
 full). Nothing is refused or scheduled on it — an install that will not fit still fails the way it
 did, this only makes the reason visible, which matters because low disk surfaces from SteamCMD as
 an error naming neither the disk nor the space (ADR-089).
+**The heartbeat also carries what the node is doing right now** (ADR-188): the one-minute load
+average and the memory in use (`MemTotal − MemAvailable`), both declared on `Heartbeat` from the
+first protocol and set by no agent until then, so every node reported zero. They are stored on the
+node row on every heartbeat, never at handshake, and shown on the node page's Host card (memory as
+a meter beside total, load beside the core count) and on the fleet's node-group summary line — only
+for a connected node whose agent reports them. An older agent's zeros read as unknown, not idle:
+memory in use is never zero on a measurable host, so it is what decides whether a load of 0.00 is a
+quiet node or no reading at all.
 May carry an operator-assigned port range (ADR-048); unset means every port on it allocates
 from the global default range instead. It also carries **where it can be reached** — the peer
 address observed when its agent last dialled in, plus an optional operator override for when
