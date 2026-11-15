@@ -399,6 +399,11 @@ behind a disclosure. **A reinstall** (ADR-142's Force clean) helps only when the
 fresh download gets past; for Access Denied or Missing configuration it fails the same way, so its
 confirmation says so and a stuck install does not suggest it. Since ADR-191 it builds beside the
 live files, so a failed reinstall no longer leaves servers with nothing.
+**An Access Denied on the installed build's own manifest is not a closed depot** (ADR-197): an
+update in place or on a clone asks for the manifest the files came from, and Steam refuses an
+anonymous login one the publisher has moved to a non-public branch, while the new build downloads
+fine. Found live on Valheim; such a failure says a fresh download works, and the next staging
+downloads fresh instead of copying the old files again.
 
 **A failing install backs off instead of being re-attempted forever** (ADR-189, amending ADR-171).
 The update poller used to re-trigger a failed install on every check, stopping its servers for up
