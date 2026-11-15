@@ -134,6 +134,22 @@ override, the port range, agent update and removal live.
 references it. Refcounted; cannot be deleted while referenced. Optional: seeds whose
 container image already contains the game have no separate install.
 
+**An install row is one build directory** (ADR-190). It carries a role in its lineage:
+`current` (what servers run on, or a shared install's cache), `staged` (a new build being made
+beside it, which nothing references yet) or `previous` (a replaced build kept as a library
+build). Only a current row is ever handed to a server or checked for updates, and the
+shared-identity uniqueness rule applies to current rows alone, so a node can hold several builds
+of one seed at once. Each build records the buildid its own SteamCMD manifest names, its size on
+disk, the install it was cloned from, and a render key: a digest of the rendered steps that built
+it, which decides whether one build can be cloned into another and come out as a fresh run would.
+The agent can fill an empty install directory by **cloning** another install on the same node
+(protocol 18): a reflink where the filesystem supports it, a real copy otherwise, never a
+hardlink, built beside the target and renamed into place, with free space checked against a
+reserve kept for running servers, and the source only ever read. This is the foundation for
+side-by-side updates, where the new version is built beside the running one and servers are
+switched to it with only a restart; in this release nothing stages or clones yet, and every
+update still runs in place as described below.
+
 **Server** — the managed unit. What you start, stop, back up, and open a console on.
 **Every server is a pod of one or more containers**, with exactly one marked primary.
 Single-container servers are pods of one — there is no special case (ADR-017).
