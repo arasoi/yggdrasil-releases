@@ -352,7 +352,8 @@ secret (ADR-177, ADR-179).
 on every tick — checks every install declaring `version_check` on its own configurable interval
 (default 12 hours). Unlike Steam's ground-truth manifest read, "installed" here is only the control
 plane's own memory of the last value it applied or first observed: the first check ever run
-against an install establishes that baseline rather than flagging an update, an ordinary check only
+against an install records the server's own value of the managed variable as installed (ADR-199;
+it took the upstream value until then, so a server already behind read as current), an ordinary check only
 advances the recorded upstream value, and a fetch or parse error leaves both values exactly as they
 were rather than zeroing them, since zeroing a memory-based value would erase something nothing
 else re-derives. `/installs` shows the identical column shape for both mechanisms, mutually
