@@ -194,7 +194,12 @@ its page's identity line: what the running game printed, through the seed's `log
 rule marked `version: true`, else the version its `version_check` install downloaded, else its
 install's Steam build. One function (`resolveGameVersion`) decides it for both pages, and the
 fact it came from is not repeated among the server's other facts. The fleet page loads installs
-once per node, not per server.
+once per node, not per server. **The build records it too** (ADR-200): when a server reports its
+version fact, the hub tells the web layer (`hub.FactObserver`, satisfied by `*web.Server`), which
+writes it to the server's install row (`installs.game_version`). `/installs` leads each build with
+that version ("98.6 · build 26672069"), a previous build keeps the version it ran, and a stopped
+server shows its build's recorded version rather than a Steam build number. A version check's
+installed value is shown as the version in its file name, never the URL.
 
 **An install update is staged beside the live install and swapped in with a restart**
 (ADR-191). Update install, the update poller and Reinstall (formerly Force clean) create a
