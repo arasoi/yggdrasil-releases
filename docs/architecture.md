@@ -690,38 +690,45 @@ column *and* rebuilds that server's pod, since the `/cluster` mount and `-cluste
 are fixed into the container at create time and the column alone changes nothing the game sees.
 
 **A cluster also carries `variables` and `settings`, the same shape a server's own stored
-values take, that its members inherit** (ADR-103). Nothing is inherited unless the cluster
-deliberately manages a name — its two columns start empty, and a name neither the cluster nor
-a member manages falls through to the seed's ordinary default exactly as it always has. One
-function, `storedFor`, composes the two layers (a server's own values winning name for name)
-and every place that used to build a server's resolved variables and settings directly — the
-pod spec, config files, the connect block, a backup's hooks, an install update, settings
-import's comparison — now routes through it, so there is one place the composition can be
-gotten right rather than six.
+values take, and every member uses them by default** (ADR-103, reworked by ADR-202). A cluster
+stores only the names whose value differs from the seed's default, so a name it never changed
+keeps following the seed (a seed update still reaches the members); a member's own values win
+name for name. One function, `storedFor` (`composeStored`), composes the two layers and every
+place that builds a server's resolved variables and settings routes through it — the pod spec,
+config files, the connect block, a backup's hooks, an install update, settings import's
+comparison. A control the seed marks **`per_server`** (ARK's `map` and `session_name`) is
+inherently one server's own: the cluster page does not offer it, a cluster never stores a value
+for it, `composeStored` ignores any cluster value for it, and a clustered server always keeps
+its own.
 
-**A setting the seed marks `cluster_default` is managed from the moment the cluster exists**
-(ADR-112), rather than starting empty and waiting on an operator to open `/clusters/{id}/settings`
-and check boxes by hand. `handleCreateCluster` seeds the cluster's own `settings` column, right
-after writing the row, with every `cluster_default` setting's own declared default — the exact
-values `/clusters/{id}/settings` would otherwise need an operator to enter one by one before a
-single member could inherit anything. This is deliberately narrow: it exists at cluster
-*creation* only, never retroactively applied to a cluster made before a seed gained the field, and
-it covers `settings` only — a *variable* is far more often the thing meant to differ per member
-(ARK's own `map`), so there is no equivalent for `variables`. Everything downstream is unchanged:
-a member created afterward inherits exactly as `storedFor` already composes, and an operator can
-still override any one control per server through the same `manage_<name>` toggle described below.
-
-`/clusters/{id}/settings` is where an operator sets what the cluster manages; a member's own
-Settings page shows every overridable control with a `manage_<name>` checkbox beside it —
-checked means this server's own value wins and is written to its own row, unchecked means the
-name is left out of that row entirely and the server keeps following the cluster. The identical
-mechanism serves both ends: a cluster's own settings page is the same rendering with nothing
-above it to inherit from, so deciding what the cluster manages at all uses the same toggle a
-member later uses to claim a name back. Saving a cluster's values rebuilds every member
+`/clusters/{id}/settings` has no tick boxes: every control shows its value (the cluster's, else
+the seed default), and a save stores what differs from the seed default. An optional setting
+posted at its default is not stored unless the cluster already stores it, since storing it would
+make it present and write it into every member's config. A member's own Settings page is where
+one control is overridden: a presence-only `manage_<name>` checkbox — checked means this
+server's own value wins and is written to its own row, unchecked means the name is left out of
+that row and the server follows the cluster. `cluster_default` (ADR-112) is now inert, still
+accepted so published seeds keep loading: nothing needs to be pre-seeded when the cluster's
+values apply by default. Saving a cluster's values rebuilds every member
 sequentially — the same shape a seed rollout already uses (`handleRebuildSeedServers`) and for
 the same reason: five maps rebuilding on one node at once turns a routine change into a
 coordinated outage — and an offline node or a failed rebuild is reported by name rather than
 silently dropped.
+
+**Joining a cluster, and the one-time normalization, drop only overrides that change nothing**
+(ADR-202). A server created standalone stores every value, so after joining it would override
+the cluster on every name. `planMember` (Rule J) reduces its own maps: a `per_server` name is
+always kept; a setting is dropped when it equals what the cluster would give it (the cluster's
+stored value, else the seed default, with the same presence); a variable is dropped only when
+the cluster itself stores the same value, so a variable equal to the seed default never starts
+following a cluster value later. `planPreservesConfig` checks that the rewrite resolves exactly
+as before and a failing plan is not applied. A join persists membership and the rewrite in one
+transaction before the rebuild. Existing members are reduced once by `NormalizeClusterInheritance`
+at startup (migration 00046's `clusters.inheritance_normalized`, set per cluster in the same
+transaction as the rewrite, so it never re-runs over an override an operator ticked on purpose);
+it rebuilds nothing. One consequence worth knowing: an optional setting is present or absent, so
+a standalone server joining a *new* cluster keeps its optional settings pinned until the cluster
+stores the same value — existing clusters, which hold their frozen values, normalize fully.
 
 **Joining a cluster at creation starts from full inheritance, not a snapshot of whatever the
 creation form happened to show.** The creation form has no per-control toggle of its own — adding
@@ -1483,7 +1490,7 @@ a save whose variables, settings, add-ons and ports all match what is stored onl
 rejected save re-renders what the operator submitted, every control refused marked by its label,
 with a banner saying nothing was saved — rather than rebuilding the form from stored state and
 discarding a long form's edits. The same holds on a cluster's settings page, whose override
-toggles read as the cluster's ("Set by the cluster for every member") rather than a member's, and on the
+page has no override toggles at all (the cluster's values apply by default), and on the
 creation form, which keeps its name, node and cluster, can be built against a chosen cluster so
 its controls show what the new member inherits, and lands on the new server's own page. All of
 these forms share one section order and one set of partials (conventions.md's Settings-forms row).
