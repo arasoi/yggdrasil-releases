@@ -189,6 +189,13 @@ failure. A server's page shows its Game build (buildid, installed, size), Roll b
 its ⋯ menu, and the staged-update banner with Cancel and Apply now, worded as a rebuild for a
 Rebuild's staging.
 
+**Every server shows the version of the game it runs** (ADR-198), on its fleet card and in
+its page's identity line: what the running game printed, through the seed's `logs.values`
+rule marked `version: true`, else the version its `version_check` install downloaded, else its
+install's Steam build. One function (`resolveGameVersion`) decides it for both pages, and the
+fact it came from is not repeated among the server's other facts. The fleet page loads installs
+once per node, not per server.
+
 **An install update is staged beside the live install and swapped in with a restart**
 (ADR-191). Update install, the update poller and Reinstall (formerly Force clean) create a
 `staged` build and an `install_stage` job: a clone of the live build updated in place, or a fresh
