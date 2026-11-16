@@ -1483,7 +1483,7 @@ a save whose variables, settings, add-ons and ports all match what is stored onl
 rejected save re-renders what the operator submitted, every control refused marked by its label,
 with a banner saying nothing was saved — rather than rebuilding the form from stored state and
 discarding a long form's edits. The same holds on a cluster's settings page, whose override
-toggles read as the cluster's ("Managed for every member") rather than a member's, and on the
+toggles read as the cluster's ("Set by the cluster for every member") rather than a member's, and on the
 creation form, which keeps its name, node and cluster, can be built against a chosen cluster so
 its controls show what the new member inherits, and lands on the new server's own page. All of
 these forms share one section order and one set of partials (conventions.md's Settings-forms row).
