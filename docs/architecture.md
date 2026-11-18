@@ -2348,6 +2348,10 @@ generic base image library filling that gap:
   start, before the privilege-drop decision below — replacing a fix three seeds (Garry's Mod,
   Team Fortress 2, Palworld) used to duplicate by hand in their own launch command (ADR-125; see
   conventions.md's container-preparation rule).
+  It also carries Xvfb, started by the same entrypoint only when a seed sets `YGG_XVFB=1`, for a
+  native Linux server that refuses to start without an X display it never draws to — Core Keeper's
+  Unity server (ADR-204). Xvfb's hard dependency on `libgl1` brings Mesa and LLVM with it, about
+  220 MB on an image every SteamCMD install pulls.
 - **`images/base-steamcmd-proton`** — `FROM` `base-steamcmd`, adding a pinned GE-Proton runtime
   and `umu-launcher` (ADR-047's amendment), for a Steam-distributed game whose dedicated server
   has no native Linux build at all and ships only a Windows binary. ARK Survival Ascended is the
