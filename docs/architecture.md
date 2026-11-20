@@ -409,8 +409,11 @@ protocol 17; `jobs.steamcmd`). The diagnosis is classified from the log first
 (`internal/shared/steamstate`), with StateFlags as best-effort secondary context, and `/jobs`,
 `/installs` and a server's failed-install banner show the cause, the raw values, and the log
 behind a disclosure. **A reinstall** (ADR-142's Force clean) helps only when the cause is one a
-fresh download gets past; for Access Denied or Missing configuration it fails the same way, so its
-confirmation says so and a stuck install does not suggest it. Since ADR-191 it builds beside the
+fresh download gets past; for Access Denied or Invalid platform it fails the same way, so its
+confirmation says so and a stuck install does not suggest it. A bare `Missing configuration` is not
+one of those: it is as often a transient upstream failure as a depot mismatch, so it reads as
+possibly transient with Retry first, and the agent's own retry spans several minutes to absorb it
+(ADR-205). Since ADR-191 it builds beside the
 live files, so a failed reinstall no longer leaves servers with nothing.
 **An Access Denied on the installed build's own manifest is not a closed depot** (ADR-197): an
 update in place or on a clone asks for the manifest the files came from, and Steam refuses an
