@@ -2346,7 +2346,9 @@ generic base image library filling that gap:
   curl's legacy GnuTLS-flavoured SONAME rather than the OpenSSL-flavoured build Debian installs
   by default, found live when Team Fortress 2's `replay_srv.so` refused to load without it
   (ADR-047's 2026-08-27 amendment) — the two builds share a SONAME but are ABI-incompatible, so
-  only installing the real package fixes it. Its `entrypoint.sh` also stages SteamCMD's own
+  only installing the real package fixes it. It installs LLVM's `libc++1`/`libc++abi1` too, with
+  `libc++.so` linked to the runtime library, for an Unreal server built against libc++ (Pavlov
+  VR, ADR-047's 2026-11-24 amendment). Its `entrypoint.sh` also stages SteamCMD's own
   native `steamclient.so` into `$HOME/.steam/sdk<32|64>` unconditionally on every container
   start, before the privilege-drop decision below — replacing a fix three seeds (Garry's Mod,
   Team Fortress 2, Palworld) used to duplicate by hand in their own launch command (ADR-125; see
