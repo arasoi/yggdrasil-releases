@@ -381,7 +381,7 @@ waits for no player to be online (the gate moved from the poller to swap time, a
 Apply now, Cancel staged update and the per-install update lock all apply unchanged. Every staging
 of a `version_check` seed (an Update, a Reinstall, a Rebuild onto a new recipe) records the
 variable's value it was rendered with, so a swap never writes back a version inherited from the
-build it replaces. A download build a swap replaces is **not** kept for rollback: rolling back
+build it replaces. A staging a control-plane restart interrupted is re-dispatched with that recorded value too, never the server's own (which still names the old version), and is failed instead when the seed's install recipe changed in the meantime. A download build a swap replaces is **not** kept for rollback: rolling back
 would put the old files under a variable that names the new version, so it is offered neither
 rollback nor pin and is removed once its grace period has passed, whatever the retention setting.
 
@@ -774,6 +774,12 @@ On startup the agent enumerates labelled containers and rebuilds its world from 
 running pods, their member containers, states, and allocations. There is no local database
 and no state file whose loss matters (ADR-012).
 
+What labels cannot carry -- dependency edges, mounts, readiness and crash rules, a `once` flag --
+the control plane resends on every reconnect: each seed-driven server the node reports up gets its
+current pod spec as a Provision, which on an existing pod replaces the agent's cached spec and
+changes nothing else (ADR-207). Without it, the first crash restart after an agent update would run
+on the label reconstruction.
+
 Install directories are *data*, not state: the control plane stays authoritative for "install
 X exists on node Y at version Z," and any manifest on disk is an integrity check, never
 authority.
@@ -1071,7 +1077,7 @@ Retry that builds its plan from `Desired == running` found nothing to restart, l
 even when it succeeded. Both paths now restore the intent. Whether the server is also *started*
 again is decided per job type rather than uniformly — install-update yes, a rebuild's own install
 no (its pod was destroyed before dispatch, ADR-126), a failed restore no (the disk may be
-half-written, and that is a worse thing to bring a game up on than nothing).
+half-written, and that is a worse thing to bring a game up on than nothing). A control-plane restart that cuts a restore or move off is one more such failure (ADR-208): an interrupted move's servers get their intent back at startup and are started on their source node when it reconnects, and an interrupted restore waits for the agent's own late verdict, which is now believed.
 
 **Live state** — `hub.EventHub`, the console hub's sibling, fans state changes out to every
 open browser tab so a page reflects what the fleet is doing without being reloaded (ADR-058).
@@ -1512,7 +1518,7 @@ edit (ADR-063). The source node archives the server's writable state and uploads
 control plane stages it; the target downloads, restores, and the server is repointed,
 reallocated, provisioned and — if it was running — started again. The **install does not
 travel**: it is reproducible from the seed (the same reason ADR-023 excludes it from backups),
-so the target resolves its own and the source's refcount drops. Ports are reallocated from the
+so the target resolves its own and the source's refcount drops. When the target's install still has to download, a server that was running is restarted by that install's job once the files exist, not by the move, whose Start would reach a pod that does not exist yet. Ports are reallocated from the
 target's range, so players need the new numbers. A clustered server cannot move on its own,
 since a cluster's volume is node-local (ADR-020). The archive travels over two RPCs of its
 own rather than the persistent stream, exactly as an agent binary does (ADR-041); backups
