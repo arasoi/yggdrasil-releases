@@ -419,7 +419,10 @@ live files, so a failed reinstall no longer leaves servers with nothing.
 update in place or on a clone asks for the manifest the files came from, and Steam refuses an
 anonymous login one the publisher has moved to a non-public branch, while the new build downloads
 fine. Found live on Valheim; such a failure says a fresh download works, and the next staging
-downloads fresh instead of copying the old files again.
+downloads fresh instead of copying the old files again. The lineage remembers it (ADR-210): every later
+update of that game on that node downloads fresh, so a publisher that keeps moving old builds off
+the public branch costs a full download per update instead of a failed attempt and a six-hour
+backoff.
 
 **A failing install backs off instead of being re-attempted forever** (ADR-189, amending ADR-171).
 The update poller used to re-trigger a failed install on every check, stopping its servers for up
