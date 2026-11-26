@@ -1841,10 +1841,14 @@ origin configured, a tab explains that the feature is off rather than serving an
 same-origin fallback. The tab's iframe points at `<addon origin>/a/{id}/{role}/enter` with a
 60-second, single-use, HMAC-signed ticket (key in `<data_dir>/addon-ticket.key`) binding the user,
 server, role and the UI page's own origin. The addon listener redeems it, re-checks
-`servers.manage_addons` and that the addon is still enabled, and issues an addon-session cookie
-scoped to `/a/{id}/{role}/`, bound to the yggd session that minted it and re-validated at least
-every minute (an upgraded websocket is closed when a re-check fails). That listener serves nothing
-of the UI: an entry, a wrapper page, the proxied addon under `/a/{id}/{role}/app/`, and one script.
+`servers.manage_addons` and that the addon is still enabled, and redirects into an addon session
+whose 256-bit token is in the path, `/a/{id}/{role}/s/{token}/` (ADR-209) -- not a cookie, which a
+browser would send to every addon on this one origin, letting one addon's script drive another's
+session. The session is bound to the yggd session that minted it and re-validated at least every
+minute (an upgraded websocket is closed when a re-check fails); an addon's own cookies are scoped
+to its session's path, and its pages send no full URL to another origin. That listener serves
+nothing of the UI: an entry, a wrapper page, the proxied addon under `/a/{id}/{role}/s/{token}/app/`,
+and one script.
 It never treats yggd's session cookie as authentication and strips every `ygg_*` cookie before
 proxying — on a same-host, different-port deployment the browser sends yggd's session cookie there
 too, since host cookies ignore the port.
