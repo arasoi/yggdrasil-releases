@@ -600,6 +600,12 @@ container to look at.
 `StopSpec` carries `{ConsoleCommand, Timeout, ThenSignal}`: write the command to the primary
 container's stdin, wait, escalate to SIGTERM, then SIGKILL.
 
+**A seed can also stop its game over RCON** (`stop.rcon`, ADR-211), for a game that reads nothing
+from stdin and does not save on a signal — ARK Survival Ascended under Proton, verified live. The
+control plane renders the server's own RCON port and password into `StopSpec.rcon` (protocol 19);
+the agent sends the commands to that port on its own host, waits for the exit, and only then falls
+back to the console command and the signal.
+
 **The `StopSpec` rides on the stop command, exactly like the `PodSpec` above, and the agent keeps
 no copy of it** (ADR-129) — a cached copy here once silently overrode the real spec (populated
 from `runtime.DefaultStopSpec()`), so every seed's graceful-stop command went unused in favor of a
