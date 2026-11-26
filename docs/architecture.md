@@ -532,8 +532,9 @@ failure and still deletes the row rather than refusing — the cost is an orphan
 operator can still remove by hand. Ordering follows whichever check can still refuse: a server's
 archives are listed and reclaimed before the row that would cascade them away, while an install's
 row goes first, since reclaiming before a refused delete would wipe a still-mounted install. The
-agent's own startup sweep, run after adoption, is equally narrow — only an exited one-shot
-installer (ADR-057) and an unattached pod network, never a container the control plane simply
+agent's own startup sweep, run after adoption, is equally narrow — only a one-shot
+installer (ADR-057) that has exited or that carries this node's id (a sweep runs before this process
+starts any, so a running one is the dead process's) and an unattached pod network, never a container the control plane simply
 didn't mention (ADR-031). See conventions.md's ownership-and-reclamation rules for the full
 statement.
 
@@ -1001,9 +1002,10 @@ both directions of the mTLS handshake:
 4. A node that never renews before finalize is cut off there — its certificate no longer verifies
    against the narrowed pool, and the server's newly-presented certificate no longer matches what
    it has pinned locally either. Recovery is the pre-existing `ygg-agent enroll --force` path,
-   with the identity-loss consequence that already implies. *Cancel* is the mirror image: a node
-   that already renewed under the pending CA needs one more renewal afterward, since its
-   certificate was signed by a CA the pool no longer trusts once cancel drops it.
+   with the identity-loss consequence that already implies. *Cancel* is the mirror image, and is
+   refused once any node has renewed: that node's certificate was signed by the pending CA,
+   which cancel drops from the pool, and renewal is an RPC that needs a certificate that
+   verifies, so the node could neither connect nor renew. Finalizing is what keeps it.
 
 **Signing-key rotation** is simpler, since the key is never part of the mTLS handshake — it only
 matters when a node verifies a downloaded agent binary. Rotating replaces the key immediately (no
@@ -2562,14 +2564,14 @@ surfaced on `/settings` with a link but stay owned by their own pages, since swi
 action rather than a stored value (ADR-056).
 
 The table is key/value; what a key *means* lives in `internal/control/settings` as a registry of
-typed `Definition`s. Twenty-five ship, each with a live consumer — the ten provider Sign-in
+typed `Definition`s. Twenty-six ship, each with a live consumer — the ten provider Sign-in
 settings (ADR-115, read fresh by `loadProviderSettings` on every login), the two session limits
 `auth.session_idle_hours` and `auth.session_max_days` (read by the authenticator on every
 request through the function `web.New` installs, ADR-181), and these: `log.level` (the
 process's own `slog.LevelVar`, so debug can be switched on and off without a restart),
 `stats.retention_days` (read by `telemetry.Collector` on every prune), `backups.retention_days`
 (read by the scheduler's archive prune the same way, ADR-088), `audit.retention_days` (read by
-the same scheduler tick to prune the audit trail, default 365 with a floor of 30, ADR-178),
+the same scheduler tick to prune the audit trail, default 365 with a floor of 30, ADR-178), `jobs.retention_days` (the same tick again, pruning finished jobs past it while always keeping each target's newest, default 90 with a floor of 7),
 `nodes.disk_low_percent` (read through `Capacity.DiskLow`,
 ADR-134), `ui.language` (ADR-086), `steam.api_key`, `steam.update_check_interval_hours` (read by
 `gameupdate.SteamChecker` on every tick, the same shape as the retention settings above, ADR-171),
@@ -2664,7 +2666,9 @@ Scope is a homelab: a small set of trusted people, not untrusted tenants.
   at route registration and a test enumerates the set.
 - **Brute force** (ADR-181) — lockout is keyed on (username, client address), so a guesser locks
   out only themselves; failures on one name from many addresses slow every attempt on it
-  (doubling to five seconds) instead of locking it. Each client may hold one of the four argon2id
+  (doubling to five seconds) instead of locking it, and past that point only one such attempt on
+  the name runs at a time, so the delay is a rate rather than a latency. An IPv6 client is counted
+  by its /64, so rotating addresses within one subscriber's block does not dodge the lockout. Each client may hold one of the four argon2id
   slots at a time. Neither stops a spray from four or more addresses holding every slot and so
   shedding the holder's own attempt, so a browser that has signed in to an account with its
   password carries a long-lived device cookie (HMAC-sealed under `pki/device.key`, naming that
