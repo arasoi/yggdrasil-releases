@@ -1870,6 +1870,17 @@ It never treats yggd's session cookie as authentication and strips every `ygg_*`
 proxying — on a same-host, different-port deployment the browser sends yggd's session cookie there
 too, since host cookies ignore the port.
 
+**A wildcard `addon_public_url` gives every session a host of its own** (ADR-218):
+`https://*.<domain>` serves each addon session from `<label>.<domain>`, a fresh 26-character
+random label per tab load named in the session's ticket, with the addon at that host's root and
+nothing rewritten. That is what an addon requesting absolute paths needs (FiveM's txAdmin calls
+`/api/...` and `/login`); a seed marks such a tab `ui.root: true`, and a single-host addon origin
+shows that tab as needing a wildcard instead of framing a broken page. The label is public, so
+the session is a key in a host-only `HttpOnly` `SameSite=Lax` cookie set on that host at entry
+and stripped before proxying. Every session being its own origin, add-ons are isolated from each
+other by the browser itself, cookies included. Only a session-shaped label is ever served, so a
+first-level wildcard covering the UI's own host name is accepted.
+
 **An add-on's port is private, and the proxy reaches it through the agent** (ADR-216). A
 container's `ui.port`, and every port of `kind: web`, is published on the node's loopback alone,
 never on its network, so nothing but the node itself and Yggdrasil can reach a database admin tool
