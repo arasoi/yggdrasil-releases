@@ -327,6 +327,9 @@ unlike seed authoring's host-side Linux-depot check). `internal/control/gameupda
 a fourth background poller, shaped exactly like the backup scheduler — asks this of every steamcmd
 install on a configurable interval (default 6 hours), records the result, and shows an "Update
 available" badge on `/installs` regardless of whether an operator opted in to anything further.
+It checks up to four nodes at once and one install at a time per node, and a check that fails
+keeps the install's recorded build, which is the build's identity, while clearing the upstream
+one, so a failure never reads as an update (ADR-214).
 An install may additionally be opted into `auto_update`, in which case a detected update is
 applied automatically through the exact same path the manual "Update install" button always
 used — unless a server referencing the install is both running and, per its seed's own
@@ -516,7 +519,8 @@ route at all. One agent-side command, `ReclaimData`, frees a server directory, a
 directory, or a backup archive, shaped like `DeleteClusterVolume` (ADR-066) since none of these
 sit inside the per-server file sandbox (ADR-033). Deleting a server frees its directory and its
 archives, a move frees the source node's copy, deleting an install frees its files once nothing
-references it, and the scheduler prunes archives past `backups.retention_days`.
+references it, and the scheduler prunes archives past `backups.retention_days` — never a server's
+or cluster's newest, which is kept however old it is (ADR-214).
 
 **Which install has an owner depends on whether it is shared** (ADR-096; conventions.md's
 ownership rule, backed by `resolveInstall`/`releaseInstall`, states the same distinction). A seed
