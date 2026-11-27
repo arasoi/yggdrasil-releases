@@ -584,14 +584,16 @@ type Runtime interface {
     Events(ctx context.Context) (<-chan Event, error)       // exit watching beats polling
     ReapOrphans(ctx context.Context) (OrphanReport, error)  // startup leftover sweep (ADR-088)
     LoadImage(ctx context.Context, tarPath string) (ref string, err error)  // op: load_image (ADR-155)
+    Endpoints(ctx context.Context, id ServerID, role string, port uint16) ([]string, error) // ADR-216
 }
 ```
 
 `Start` and `Stop` take the full `PodSpec` rather than an id, because after an agent restart
 container labels carry identity only, never configuration (ADR-012) — the dependency graph
-must arrive fresh on every call. The four widenings past the original lifecycle set each
+must arrive fresh on every call. The five widenings past the original lifecycle set each
 carry their own ADR: `Exec` (ADR-042), `RunOnce` (ADR-057), `ReapOrphans` (ADR-088), `LoadImage`
-(ADR-155). `RunOnce`, `ReapOrphans` and `LoadImage` are, like `Adopt`, not addressed by server
+(ADR-155), `Endpoints` (ADR-216, where a container port can be dialled from the host, for a
+tunnel). `RunOnce`, `ReapOrphans` and `LoadImage` are, like `Adopt`, not addressed by server
 id at all — what each acts on is not one pod: a throwaway container, the node's own runtime
 leftovers, and the node's own image store, respectively.
 
@@ -1760,7 +1762,7 @@ control plane — so the agent still needs no access to a seed's variables or to
 channel (ADR-012). The old `method`/`url`/`archive`/`filename`/`app_id` fields are still written
 alongside the steps, so a protocol 1 agent installs exactly as it did; that work
 took the negotiated protocol to 2 (ADR-014's N-1 window, which until then had no real history to
-mean anything against), and later additive bumps have since taken it to 16 — the log viewer
+mean anything against), and later additive bumps have since taken it further — the log viewer
 (ADR-082), `ReclaimData` (ADR-088), managed config writes (ADR-092), cluster file operations
 (ADR-105), the destroy confirmation (ADR-107), a per-step SteamCMD depot-bitness override
 (ADR-121), a per-step SteamCMD depot-platform-OS override (ADR-123), a node's own free-disk
@@ -1768,7 +1770,9 @@ figure on every heartbeat (ADR-134), the install force-clean escape hatch (ADR-1
 Files page's zip-extract option (ADR-146), a container's image being sourced from an
 install step rather than a registry (ADR-155), a one-shot container (ADR-156), the install
 update check (ADR-171), and an agent-binary signature bound to its version and architecture plus
-a download step's sha256 pin (ADR-183). `op: load_image` itself, unlike every one of
+a download step's sha256 pin (ADR-183), and since then the SteamCMD diagnostics (ADR-189), install
+clones (ADR-190), the RCON stop (ADR-211) and the container tunnel (ADR-216), taking it to 20.
+`op: load_image` itself, unlike every one of
 those, needed no bump at all — it reuses wire fields already generic since protocol 2.
 `internal/configfile` is the shared key-patching implementation behind both
 the `patch` step and a config file managed `patch`, so a key path means the same thing at
@@ -1866,20 +1870,29 @@ It never treats yggd's session cookie as authentication and strips every `ygg_*`
 proxying — on a same-host, different-port deployment the browser sends yggd's session cookie there
 too, since host cookies ignore the port.
 
-**The proxy dials exactly the addon** (ADR-182, S47/S65): the node's *observed* address (where its
-agent's stream came from, never the advertise override, which is for players), at the port
-allocated to that container's declared UI port, and only once the addon container is reported
-running from a start no earlier than that allocation — so a port pinned in Settings whose rebuild
-has not happened yet reads as "rebuild first" rather than reaching whatever else listens there.
-Proxying rather than linking directly to the node's address is still deliberate: a direct link
-breaks in an iframe the moment the operator reaches the UI through the tunnel (mixed content, HTTPS
-parent page and bare HTTP target). The proxy strips an addon's own `X-Frame-Options` and any CSP
-`frame-ancestors` directive from its response (ADR-151) — Adminer's own `X-Frame-Options: deny`
+**An add-on's port is private, and the proxy reaches it through the agent** (ADR-216). A
+container's `ui.port`, and every port of `kind: web`, is published on the node's loopback alone,
+never on its network, so nothing but the node itself and Yggdrasil can reach a database admin tool
+or a game's web panel. The proxy asks the node's agent for a tunnel (protocol 20): `TunnelOpen`
+down the persistent stream names the server, the container and the port inside it; the agent dials
+that container at its address on the pod network, or through its loopback binding where the host
+cannot route to pod networks (rootless Podman), and carries the connection over its own `Tunnel`
+call, off the persistent stream. The control plane names a port, never a host: the agent dials only
+what its runtime reports for that pod's container (`Runtime.Endpoints`). The tunnel is accepted only
+from the node it was asked of, and its control-plane end is an ordinary `net.Conn`
+(`hub.DialTunnel`). The proxy still waits until the addon container is reported running from a
+start no earlier than its UI port's allocation (S47), so a port pinned in Settings whose rebuild has
+not happened yet reads as "rebuild first". A node whose agent is below protocol 20 shows the tab
+with "update the agent". Proxying rather than linking is still deliberate: a direct link breaks in
+an iframe the moment the operator reaches the UI through the tunnel (mixed content), and there is
+no reachable address to link to any more. The proxy strips an addon's own `X-Frame-Options` and any
+CSP `frame-ancestors` directive from its response (ADR-151) — Adminer's own `X-Frame-Options: deny`
 would otherwise defeat the one thing this exists for — and adds its own
 `frame-ancestors 'self' <UI origin>`, nosniff, and a referrer policy; the UI's own CSP `frame-src`
-names the addon origin. A published port whose image cannot be told what to bind to at all may also
-need `container_port` (ADR-150) to be reachable in the first place — Adminer's own standalone server
-always listens on a fixed 8080 regardless of the host port it is allocated.
+names the addon origin. An image that cannot be told what to bind to at all declares
+`container_port` (ADR-150), which is then the port the tunnel asks for — Adminer's own standalone
+server always listens on a fixed 8080. The allocations and server pages show a private port as
+"private" rather than as a connect address.
 
 **A container's `ui` may also declare `login`, to auto-submit its own login form** (ADR-152,
 ADR-182) — values yggd already knows (a generated database password, a fixed username) rendered
