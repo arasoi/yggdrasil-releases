@@ -1894,6 +1894,18 @@ names the addon origin. An image that cannot be told what to bind to at all decl
 server always listens on a fixed 8080. The allocations and server pages show a private port as
 "private" rather than as a connect address.
 
+**A seed's own database gets a built-in tool** (ADR-217). A container declaring `database:`
+(engine mariadb, mysql or postgres, its port inside the container, and templated `user`, `password`
+and `name`) gives the server a Database tab for whoever holds `servers.manage_database`. The control
+plane signs in itself, over `hub.DialTunnel`, with the MySQL and pgx drivers given the tunnel as
+their dial function, so the database's port is never published at all and its credentials never
+reach a page. The tab lists databases and tables, describes a table, pages through its rows, and
+runs one statement at a time (up to 500 rows shown, 30 seconds each, a second statement after a
+semicolon refused on MariaDB/MySQL); every identifier the tool puts in SQL is one the database just
+listed. Each console statement is audited by its verb, size and digest, never its text.
+`internal/control/dbtool` does the work and knows nothing of HTTP. This replaces the Adminer and
+CloudBeaver add-ons the database seeds used to ship.
+
 **A container's `ui` may also declare `login`, to auto-submit its own login form** (ADR-152,
 ADR-182) — values yggd already knows (a generated database password, a fixed username) rendered
 through the same templating every other seed string uses. They are rendered only into the addon
