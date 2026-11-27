@@ -386,6 +386,54 @@ works: the credential is filled in on the addon origin and never appears on a UI
 creates `<data_dir>/addon-ticket.key` (0600) the first time an addon origin is configured, and
 generates a new one at its next start if you delete it.
 
+#### A host per addon session: for addons that need the root of a host
+
+With a single addon host, every addon is served under a path of its own
+(`/a/<server>/<addon>/s/<session>/app/`). That suits an addon that only uses relative links,
+such as Adminer, and breaks one that requests absolute paths: FiveM's **txAdmin** panel calls
+`/api/...` and `/login`, which land outside its path. A seed marks such a tab `ui.root: true`,
+and until the addon origin can give it a host of its own the tab says so instead of showing a
+broken page (ADR-218).
+
+Give `addon_public_url` a **wildcard** and every addon session gets its own host,
+`<random label>.<domain>`, with the addon at its root:
+
+```yaml
+addon_http_addr: 127.0.0.1:8081
+addon_public_url: https://*.addons.ygg.example.com
+```
+
+Every addon then works this way, whatever its seed says, and each session is an origin of its
+own, so no addon's script can reach another's. The label is 26 random characters and is not a
+secret; the session itself rides a host-only `HttpOnly` cookie set on that host when the tab's
+single-use ticket is redeemed. As before, keep the addon hosts **same-site** with the UI.
+
+What it needs:
+
+- **DNS:** a wildcard record for the domain pointing where the addon listener is reached
+  (behind the tunnel, a wildcard CNAME to the tunnel).
+- **Tunnel:** a wildcard public hostname for the addon listener, listed after the UI's own
+  hostname so the UI's exact match wins:
+
+  ```yaml
+  ingress:
+    - hostname: ygg.example.com
+      service: http://127.0.0.1:8080
+    - hostname: "*.addons.ygg.example.com"
+      service: http://127.0.0.1:8081
+    - service: http_status:404
+  ```
+
+- **TLS:** a certificate for the wildcard. Cloudflare's free Universal SSL covers only one level
+  (`*.example.com`); a deeper wildcard such as `*.addons.ygg.example.com` needs an Advanced
+  Certificate. A first-level wildcard is accepted too (`https://*.example.com` beside a UI at
+  `ygg.example.com`): only a 26-character random label is ever served as an addon, so the UI's
+  own name never is. Serving TLS from yggd directly needs a certificate for the wildcard name.
+- **Access:** an Access application covering the wildcard hostname, with the same policy as the
+  UI.
+
+yggd refuses any request to the addon listener whose host is not one label beneath the domain.
+
 `GET /healthz` answers `{"status":"ok","database":"ok"}` to anyone, and adds
 the running version, commit and protocol only for a signed-in browser
 session (ADR-180) — a monitor needs the first, and only an operator needs the
