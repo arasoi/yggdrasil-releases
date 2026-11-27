@@ -2675,12 +2675,16 @@ Scope is a homelab: a small set of trusted people, not untrusted tenants.
   who they are. Changing who can do what (users, invites, roles, resource grants, linked
   sign-in methods, a first password on a federation-only account), touching a credential
   (changing or clearing a secret setting, CA or signing-key rotation, enrollment tokens),
-  replacing what runs (self-update, agent binaries) and deleting a server, cluster or node all
+  replacing what runs (self-update, agent binaries, and since ADR-215 seeds: saving one,
+  installing or updating from the catalog, publishing, and the catalog and publish repository
+  settings) and deleting a server, cluster or node all
   need that to be within ten minutes, or go to `/reauth` first: the password, through the same
   lockout and hashing gate as sign-in, or a fresh round trip through a provider already linked
   to the account. A POST cannot be replayed across the redirect, so the browser returns to the
   page the form was on with an "identity confirmed, submit again" notice. `web.stepUp` is applied
-  at route registration and a test enumerates the set.
+  at route registration and a test enumerates the set. The seed editor, whose unsaved edits a
+  redirect would lose, asks `GET /reauth/status` before saving and, when the window has run out,
+  holds the save and offers the confirmation in a new tab instead (`static/stepup.js`).
 - **Brute force** (ADR-181) — lockout is keyed on (username, client address), so a guesser locks
   out only themselves; failures on one name from many addresses slow every attempt on it
   (doubling to five seconds) instead of locking it, and past that point only one such attempt on
