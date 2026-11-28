@@ -2607,6 +2607,15 @@ immutable after startup; everything else is a runtime setting in the `settings` 
 from `/settings` while yggd runs. See conventions.md's "Configuration versus settings" for the
 resolution order, secret-handling, and most-repeated-bug rules (ADR-078).
 
+**The same page edits `yggd.yaml` too, for the next start** (ADR-220). A Configuration file
+section shows the listen addresses, the UI's TLS, the trusted proxies, client-address header and
+allowed host names, the add-on origin and its TLS, and the seeds directory, with each value's
+source (file, environment, flag or default). A group is saved by rewriting just its keys in the
+file, after the whole would-be file is validated as the next start would validate it; a key an
+environment variable or a flag sets is shown and not editable. A saved change waits for a restart,
+which the page offers when yggd runs under systemd. `data_dir`, the database path and the release
+channels are not on it.
+
 The page itself is a tab rail beside one panel per group with a single search box over every
 setting, reusing `static/varform.js` unchanged from the seed-variables form (ADR-085); Sign-in's
 ten settings additionally sub-divide into per-provider boxes (Shared, Microsoft, Apple, Discord)
