@@ -1119,6 +1119,14 @@ without a second rule on the client. The socket announces itself only when it is
 ("reconnecting…"), because a page that looks current while no longer updating is the failure
 worth interrupting for.
 
+**A re-read fetches only its regions, and an action updates the page in place** (ADR-221).
+live.js names its regions in an `X-Ygg-Regions` header and the server answers with those elements
+alone. Every action button posts in the background (`inplace.js`): when the server redirects back
+to the same page the regions, plus any `data-region` part outside them an action can change, are
+swapped from a region-only re-read, so the page neither reloads nor loses its scroll, sockets or
+open groups; a redirect elsewhere or a page the server answers with is shown as the form's own
+navigation would have. Without JavaScript every form behaves as before.
+
 Three things are deliberately left outside live regions: the console page (no state badge, and
 its own socket already covers it), the Nodes page's one-time enrollment callout (a live re-read
 would swap the operator's single-use command away mid-copy), and the stats/graphs panels, which
